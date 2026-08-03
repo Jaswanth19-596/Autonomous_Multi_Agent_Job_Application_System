@@ -27,17 +27,20 @@ model_with_tools = model.bind_tools(tools)
 
 
 def read_folder_path(state):
-    folder_path = input("Enter the folder path")
+    print("Entering into Read Folder Node")
+    folder_path = input("Enter the folder path: ")
 
     return {"messages": [HumanMessage(content=folder_path)]}
 
 def file_organizer_node(state):
+    print("Entering into File organizer Node")
     response = model_with_tools.invoke(state["messages"])
 
     return {"messages": [response]}
 
 
 def tool_node(state):
+    print("Entering into Tool Node")
 
     previous_response = state['messages'][-1]
 

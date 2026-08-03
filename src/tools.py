@@ -7,9 +7,7 @@ def list_files(path: str):
     """
     List files in a directory
     """
-    print("\n\n")
-    print("called the List files tool")
-    print("\n\n")
+    print(f"called the List files tool: {path}", end='\n')
 
     try:
         response = os.listdir(path)
@@ -18,7 +16,6 @@ def list_files(path: str):
         print(e)
         return f"Raised an exception : Wrong path {e}"
 
-    print("Response of tool: ", response)
     return response
 
 
@@ -27,29 +24,57 @@ def create_folder(path: str,folder_name: str):
     """
     Used to create a new folder
     """
-    print("\n\n")
-    print("called the Create Folder tool")
-    print("\n\n")
-    os.chdir(path)
-    os.mkdir(folder_name)
+    
+    print(f"Called the Create Folder tool: {folder_name}", end = '\n')
 
-    return "created_folder"
+    try:
+        os.chdir(path)
+        os.mkdir(folder_name)
+    except Exception as e:
+
+        return f"Exception while creating a folder : {e}"
+
+    return f"created_folder : {folder_name} in path {path}"
 
 @tool
 def move_file(source_path: str, destination_path: str):
     """
     Used to move files from source to destination
     """
-    print("\n\n")
-    print("called the Move File tool")
-    print("\n\n")
+    print(f"Called the Move File tool : {source_path} to {destination_path}", end = '\n')
 
     try:
-
         shutil.move(source_path, destination_path)
-
     except Exception as e:
         print(e)
         return f"Error while moving file : {e}"
 
     return f"Moved file from {source_path} to {destination_path}"
+
+
+@tool
+def read_file(file_path : str):
+    """
+    Used to read the file content
+    """
+    print(f"Called Read File Tool: {file_path}")
+    try:
+        with open(file_path) as f:
+            content = f.read()
+        
+        return content
+    except Exception as e:
+        return f"Exception while reading the file : {e}"
+
+
+@tool 
+def change_directory(directory_path: str):
+    """
+    Used to change the directory
+    """
+    print(f"Called Change Directory : {directory_path}")
+    try:
+        os.chdir(directory_path)
+        return f"Changed the directory to {directory_path}"
+    except Exception as e:
+        return f"Exception while changing directory : {e}"

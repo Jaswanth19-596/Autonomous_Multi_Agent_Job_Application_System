@@ -33,6 +33,15 @@ graph.invoke({
         to organize the files. The user is too lazy to do it by himself, so he is giving you the 
         responsibility to do that. 
 
+        You can either decide to classify the files using the names and extensions of the files or you can also use the read_file tool
+        to read the contents of the file to get better idea about the file. This gives you more information on how to classify the file. 
+
+        If the folder that you are working with has subfolders, you also need to organize the subfolders as well. 
+        you can use the tools to move in and out of folders. 
+
+        And I also want you to identify the unnecessary files and create a folder called can_delete and add those all unnecessary files into that folder. 
+        This is not an universal folder, it should be present for a specific sub project. 
+
         use the provided tools and call one of the tools if you require. 
     """)
     ]
