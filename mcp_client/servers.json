@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@0.0.79"
+      ]
+    },
+    "gmail": {
+      "transport": "streamable_http",
+      "serverUrl": "https://gmailmcp.googleapis.com/mcp/v1"
+    }
+  }
+}

@@ -9,3 +9,19 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Logs & temp files
+*.log
+*.tmp
+
+.playwright-mcp/
+user_details/
+credentials/
