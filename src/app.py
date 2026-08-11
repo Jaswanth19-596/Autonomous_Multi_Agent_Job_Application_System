@@ -166,7 +166,7 @@ async def main():
                 "messages": [SystemMessage(content = MANAGER_SYSTEM_PROMPT)],
                 "model": manager_model
             },
-            config={"recursion_limit": 100}
+            config={"recursion_limit": 200}
         )
 
     finally:

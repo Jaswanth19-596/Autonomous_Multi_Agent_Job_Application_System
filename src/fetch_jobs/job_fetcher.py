@@ -85,12 +85,12 @@ def search_jobs(keywords, location, under10Applicants: bool = False ):
         "location": location, # string
         "geoId": "",  # string
         "distance": 0,  # int
-        "datePosted": "anyTime",  #"anyTime", "past24Hours", "pastWeek", "pastMonth" 
+        "datePosted": "past24Hours",  #"anyTime", "past24Hours", "pastWeek", "pastMonth" 
         "companyIds": [],  # list of strings
         "under10Applicants": under10Applicants,  # boolean
         "autoConvertToAiSearch": True,  # boolean
         "scrapeCompany": True, # boolean
-        "limitPerSource": 5, # int
+        "limitPerSource": 10, # int
         "splitByLocation": False, # boolean
         "splitCountry": "US", # string
     }

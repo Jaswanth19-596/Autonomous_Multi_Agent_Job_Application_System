@@ -91,14 +91,18 @@ def execution_node(state, config=None):
         model = manager_model
 
 
+    from src.logger import get_job_prefix, log_event
+
     with Live(console=console, refresh_per_second=10) as live:
-        live.update(Spinner("dots", text="[bold cyan]Thinking...[/bold cyan]"))
+        live.update(Spinner("dots", text=f"{get_job_prefix()}[bold cyan]Thinking...[/bold cyan]"))
         for chunk in model.stream(state["messages"]):
             full = chunk if full is None else full + chunk
             if chunk.content:
                 live.update(Markdown(full.content))
 
-        
+    if full and full.content:
+        log_event("LLM_CONTENT", full.content)
+
     return {
         "messages": [full],
         "tool_calls": full.tool_calls if full.tool_calls else []
@@ -145,26 +149,33 @@ def human_approval_node(state):
 
 async def tool_node(state):
     from src.tools import tools_by_name
+    from src.logger import get_job_prefix, log_event
     # Async because MCP tools are coroutine-only StructuredTools; ainvoke also
     # covers the sync native tools by running them in an executor.
     tool_responses = []
+    prefix = get_job_prefix()
 
     for tool_call in state["tool_calls"]:
-        console.print(f"\n[bold yellow]🛠️  Executing Tool:[/bold yellow] [bold cyan]{tool_call['name']}[/bold cyan]")
+        console.print(f"\n{prefix}[bold yellow]🛠️  Executing Tool:[/bold yellow] [bold cyan]{tool_call['name']}[/bold cyan]")
         if tool_call.get("args"):
             console.print(f"[dim]   Args:[/dim] {tool_call['args']}")
 
+        log_event("TOOL_CALL", f"{tool_call['name']} | Args: {tool_call.get('args')}")
+
         if tool_call["name"] not in tools_by_name:
             result = f"Error: no such tool '{tool_call['name']}'. Available tools: {', '.join(sorted(tools_by_name))}"
-            console.print(f"[bold red]❌ No such tool '{tool_call['name']}'[/bold red]")
+            console.print(f"{prefix}[bold red]❌ No such tool '{tool_call['name']}'[/bold red]")
+            log_event("TOOL_ERROR", result)
         else:
             tool = tools_by_name[tool_call["name"]]
             try:
                 result = await tool.ainvoke(tool_call["args"])
+                log_event("TOOL_RESULT", str(result))
             except Exception as e:
                 # Report the failure back to the model instead of killing the session.
-                console.print(f"[red]Tool '{tool_call['name']}' failed: {e}[/red]")
+                console.print(f"{prefix}[red]Tool '{tool_call['name']}' failed: {e}[/red]")
                 result = f"Error: tool '{tool_call['name']}' failed: {e}"
+                log_event("TOOL_ERROR", str(e))
 
         tool_responses.append(
             ToolMessage(

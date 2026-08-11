@@ -25,3 +25,4 @@ Thumbs.db
 .playwright-mcp/
 user_details/
 credentials/
+logs/
