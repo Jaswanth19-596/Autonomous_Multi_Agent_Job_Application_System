@@ -8,15 +8,18 @@ from rich.console import Console
 import asyncio
 from pypdf import PdfReader
 from pydantic import Field
-from src.tools import terminal, web_search, update_file, read_file, get_pending_jobs, update_job_status, delegate_job_application, tools_by_name, worker_model_holder
+from src.tools import terminal, web_search, update_file, read_file, get_jobs, update_job_status, update_jobboard_skill, delegate_job_application, ask_user, simplify_autofill, inspect_application_form, batch_repair_application_form, click_application_next, inspect_application_page, inspect_radio_groups, fill_radio_groups, inspect_dropdowns, fill_dropdowns, select_workday_combobox, fill_application_page, audit_application_page, upload_application_document, advance_application, resolve_application_answers, update_candidate_profile, ask_for_missing_application_data, save_application_checkpoint, load_application_checkpoint, tools_by_name, worker_model_holder
 from langchain_openrouter import ChatOpenRouter
 import os
 from mcp_client.mcp_manager import MCPManager
 
 mcp_manager = MCPManager("mcp_client/servers.json")
 
-manager_tools = [delegate_job_application, get_pending_jobs, update_job_status]
-worker_tools = [web_search, update_file, read_file]
+manager_tools = [delegate_job_application, get_jobs, update_job_status]
+# TEMPORARY AUTONOMOUS MODE: user-input tools are intentionally omitted while
+# the user is away. Re-add `ask_user` and `ask_for_missing_application_data`
+# here and in `initialize_tools()` when interactive operation is restored.
+worker_tools = [web_search, update_file, read_file, update_job_status, update_jobboard_skill, simplify_autofill, inspect_application_page, inspect_radio_groups, fill_radio_groups, inspect_dropdowns, fill_dropdowns, select_workday_combobox, fill_application_page, audit_application_page, upload_application_document, advance_application, resolve_application_answers, update_candidate_profile, save_application_checkpoint, load_application_checkpoint]
 
 
 async def shutdown():
@@ -24,8 +27,8 @@ async def shutdown():
     await mcp_manager.close()
 
 model = ChatOpenRouter(
-    # model = "~deepseek/deepseek-v4-flash-latest",
-    model = "openai/gpt-5.6-luna",
+    model = "~deepseek/deepseek-v4-flash-latest",
+    # model = "openai/gpt-5.6-luna",
     api_key = os.environ["OPENROUTER_API_KEY"]
 )
 
@@ -38,7 +41,8 @@ async def initialize_tools():
     global worker_model, worker_tools
     errors = await mcp_manager.connect()
     mcp_tools = await mcp_manager.get_langchain_tools()
-    worker_tools = [web_search, update_file, read_file] + mcp_tools
+    # Keep interactive collection tools unavailable in temporary autonomous mode.
+    worker_tools = [web_search, update_file, read_file, update_job_status, update_jobboard_skill, simplify_autofill, inspect_application_page, inspect_radio_groups, fill_radio_groups, inspect_dropdowns, fill_dropdowns, select_workday_combobox, fill_application_page, audit_application_page, upload_application_document, advance_application, resolve_application_answers, update_candidate_profile, save_application_checkpoint, load_application_checkpoint] + mcp_tools
     worker_model = model.bind_tools(worker_tools)
     worker_model_holder["model"] = worker_model
 

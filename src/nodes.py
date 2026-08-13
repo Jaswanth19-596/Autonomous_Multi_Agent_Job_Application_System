@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from langchain_core.messages import ToolMessage, HumanMessage
+from langchain_core.messages import ToolMessage, HumanMessage, AIMessage, SystemMessage
 from prompt_toolkit.history import InMemoryHistory
 from src.commands import (
     build_session,
@@ -26,19 +26,19 @@ history = InMemoryHistory()
 # Tools that require explicit human approval before execution.
 # Everything else is auto-approved.
 DANGEROUS_TOOLS = {
-    "terminal",
-    "playwright_browser_install",
-    "delegate_job_application",
-    # Gmail MCP tools
-    "gmail_send_email",
-    "gmail_draft_email",
-    "gmail_create_label",
-    "search_emails",
-    "get_email",
-    "send_email",
-    "draft_email",
-    "list_labels",
-    "create_label",
+    # "terminal",
+    # "playwright_browser_install",
+    # # "delegate_job_application",
+    # # Gmail MCP tools
+    # "gmail_send_email",
+    # "gmail_draft_email",
+    # "gmail_create_label",
+    # "search_emails",
+    # "get_email",
+    # "send_email",
+    # "draft_email",
+    # "list_labels",
+    # "create_label",
 }
 
 
@@ -80,6 +80,38 @@ def user_input_node(state):
 
     return {"messages": [HumanMessage(content=message)]}
 
+def _prune_messages(messages: list, min_history_to_prune: int = 24) -> tuple[list, int]:
+    """Prunes heavy DOM inspection ToolMessages (snapshot, find, evaluate, run_code_unsafe, screenshot)
+    from older turns when conversation history exceeds `min_history_to_prune`.
+    Preserves recent turns and non-DOM message content intact.
+    """
+    if len(messages) <= min_history_to_prune:
+        return messages, 0
+
+    pruned_msgs = list(messages)
+    num_pruned = 0
+    PRUNABLE_TOOLS = {"snapshot", "find", "evaluate", "run_code_unsafe", "screenshot"}
+    STUB = "[Previous page DOM payload pruned to conserve context window]"
+
+    # Prune oldest DOM payloads, preserving the last 6 messages untouched
+    cutoff = max(0, len(pruned_msgs) - 6)
+    for i in range(cutoff):
+        msg = pruned_msgs[i]
+        if isinstance(msg, ToolMessage) and msg.content != STUB:
+            parent_ai = next(
+                (pruned_msgs[j] for j in range(i - 1, -1, -1) if hasattr(pruned_msgs[j], "tool_calls") and pruned_msgs[j].tool_calls),
+                None
+            )
+            if parent_ai:
+                for tc in parent_ai.tool_calls:
+                    if tc.get("id") == msg.tool_call_id and any(tool in tc.get("name", "") for tool in PRUNABLE_TOOLS):
+                        pruned_msgs[i] = ToolMessage(content=STUB, tool_call_id=msg.tool_call_id)
+                        num_pruned += 1
+                        break
+
+    return pruned_msgs, num_pruned
+
+
 def execution_node(state, config=None):
     full = None
     model = state.get("model")
@@ -90,12 +122,17 @@ def execution_node(state, config=None):
         from src.app import manager_model
         model = manager_model
 
-
     from src.logger import get_job_prefix, log_event
+
+    pruned_msgs, num_pruned = _prune_messages(state["messages"])
+    if num_pruned > 0:
+        prefix = get_job_prefix()
+        console.print(f"{prefix}[dim cyan]⚡ Context optimized: pruned {num_pruned} old DOM payload(s)[/dim cyan]")
+        log_event("TOKEN_OPT", f"Pruned {num_pruned} old DOM payload(s) from context window")
 
     with Live(console=console, refresh_per_second=10) as live:
         live.update(Spinner("dots", text=f"{get_job_prefix()}[bold cyan]Thinking...[/bold cyan]"))
-        for chunk in model.stream(state["messages"]):
+        for chunk in model.stream(pruned_msgs):
             full = chunk if full is None else full + chunk
             if chunk.content:
                 live.update(Markdown(full.content))
@@ -110,8 +147,9 @@ def execution_node(state, config=None):
 
 
 def format_tool_call(i, tool_call):
+    from src.logger import redact_sensitive
     name = tool_call.get("name", "unknown_tool")
-    args = tool_call.get("args", {})
+    args = redact_sensitive(tool_call.get("args", {}))
     return f"[bold cyan]{i}. {name}[/bold cyan]\n[dim]   Args:[/dim] {args}"
 
 
@@ -149,7 +187,16 @@ def human_approval_node(state):
 
 async def tool_node(state):
     from src.tools import tools_by_name
-    from src.logger import get_job_prefix, log_event
+    from src.logger import get_job_prefix, log_event, redact_sensitive
+    from src.app import mcp_manager
+    from src.simplify_gate import (
+        PAGE_FINGERPRINT_CODE,
+        has_simplify_authorization,
+        is_gate_exempt_click,
+        is_simplify_authorized,
+        is_simplify_unsupported,
+        parse_playwright_json,
+    )
     # Async because MCP tools are coroutine-only StructuredTools; ainvoke also
     # covers the sync native tools by running them in an executor.
     tool_responses = []
@@ -158,9 +205,12 @@ async def tool_node(state):
     for tool_call in state["tool_calls"]:
         console.print(f"\n{prefix}[bold yellow]🛠️  Executing Tool:[/bold yellow] [bold cyan]{tool_call['name']}[/bold cyan]")
         if tool_call.get("args"):
-            console.print(f"[dim]   Args:[/dim] {tool_call['args']}")
+            console.print(f"[dim]   Args:[/dim] {redact_sensitive(tool_call['args'])}")
 
-        log_event("TOOL_CALL", f"{tool_call['name']} | Args: {tool_call.get('args')}")
+        log_event("TOOL_CALL", {
+            "tool": tool_call["name"],
+            "args": tool_call.get("args", {}),
+        })
 
         if tool_call["name"] not in tools_by_name:
             result = f"Error: no such tool '{tool_call['name']}'. Available tools: {', '.join(sorted(tools_by_name))}"
@@ -169,7 +219,65 @@ async def tool_node(state):
         else:
             tool = tools_by_name[tool_call["name"]]
             try:
-                result = await tool.ainvoke(tool_call["args"])
+                always_guarded_tools = {
+                    "playwright_browser_fill_form",
+                    "playwright_browser_type",
+                    "playwright_browser_select_option",
+                }
+                page_guarded_tools = {
+                    "playwright_browser_click",
+                    "playwright_browser_evaluate",
+                    "playwright_browser_run_code_unsafe",
+                }
+                exempt_click = (
+                    tool_call["name"] == "playwright_browser_click"
+                    and is_gate_exempt_click(tool_call.get("args", {}))
+                )
+                if tool_call["name"] == "playwright_browser_file_upload":
+                    # A native file chooser blocks browser_run_code_unsafe, so
+                    # fingerprinting is impossible here. The chooser was opened
+                    # by a guarded click on the already-authorized page.
+                    if not has_simplify_authorization():
+                        result = (
+                            "BLOCKED_BY_SIMPLIFY_GATE: Run simplify_autofill before "
+                            "opening and completing a resume file chooser."
+                        )
+                    else:
+                        result = await tool.ainvoke(tool_call["args"])
+                elif (
+                    tool_call["name"] in always_guarded_tools | page_guarded_tools
+                    and not exempt_click
+                ):
+                    fingerprint_output = await mcp_manager.call_tool(
+                        "playwright",
+                        "browser_run_code_unsafe",
+                        {"code": PAGE_FINGERPRINT_CODE},
+                    )
+                    page_state = parse_playwright_json(fingerprint_output)
+                    fingerprint = page_state["fingerprint"]
+                    needs_authorization = (
+                        tool_call["name"] in always_guarded_tools
+                        or page_state.get("application_form", False)
+                    )
+                    if needs_authorization and is_simplify_unsupported(fingerprint):
+                        # Simplify absence is remembered for this ATS origin.
+                        # Keep authorization page-scoped without asking the
+                        # worker to invoke the unavailable extension again.
+                        from src.simplify_gate import authorize_simplify
+                        authorize_simplify(
+                            fingerprint,
+                            "Manual fallback: Simplify panel absent on this ATS origin",
+                        )
+                    if needs_authorization and not is_simplify_authorized(fingerprint):
+                        result = (
+                            "BLOCKED_BY_SIMPLIFY_GATE: Call simplify_autofill on this "
+                            "exact page/form step first. The tool will authorize manual "
+                            "fallback when Simplify is unavailable."
+                        )
+                    else:
+                        result = await tool.ainvoke(tool_call["args"])
+                else:
+                    result = await tool.ainvoke(tool_call["args"])
                 log_event("TOOL_RESULT", str(result))
             except Exception as e:
                 # Report the failure back to the model instead of killing the session.
@@ -197,4 +305,3 @@ async def tool_node(state):
 
 
     
-

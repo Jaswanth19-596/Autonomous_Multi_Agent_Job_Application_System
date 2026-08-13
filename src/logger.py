@@ -1,4 +1,6 @@
 import contextvars
+import json
+import re
 from pathlib import Path
 from datetime import datetime
 from rich.console import Console
@@ -10,6 +12,33 @@ current_company_var = contextvars.ContextVar("current_company", default=None)
 current_log_file_var = contextvars.ContextVar("current_log_file", default=None)
 
 LOGS_DIR = Path("logs/jobs")
+
+_SENSITIVE_KEYS = re.compile(
+    r"(?:pass(?:word|wd)?|secret|token|cookie|authorization|api[-_]?key|otp|one[-_]?time[-_]?code)",
+    re.IGNORECASE,
+)
+_INLINE_SECRET = re.compile(
+    r"(?i)(\b(?:password|passwd|pwd|secret|token|cookie|authorization|api[-_]?key|otp)\b['\"]?\s*[:=]\s*)"
+    r"(?:bearer\s+)?([^\s,;}&\]]+|\"[^\"]*\"|'[^']*')"
+)
+
+
+def redact_sensitive(value):
+    """Return a recursively redacted copy suitable for logs and terminals."""
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if _SENSITIVE_KEYS.search(str(key)) else redact_sensitive(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_sensitive(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_sensitive(item) for item in value)
+    if isinstance(value, set):
+        return {redact_sensitive(item) for item in value}
+    if isinstance(value, str):
+        return _INLINE_SECRET.sub(r"\1[REDACTED]", value)
+    return value
 
 
 def setup_job_logger(job_id: str, company: str, title: str) -> Path:
@@ -28,14 +57,16 @@ def setup_job_logger(job_id: str, company: str, title: str) -> Path:
     return log_file
 
 
-def log_event(event_type: str, details: str):
+def log_event(event_type: str, details):
     """Log an event to the current job's dedicated log file."""
     log_file = current_log_file_var.get()
     if log_file:
         timestamp = datetime.now().strftime("%H:%M:%S")
         try:
             with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"[{timestamp}] [{event_type}] {details}\n")
+                safe = redact_sensitive(details)
+                rendered = json.dumps(safe, ensure_ascii=False, sort_keys=True) if isinstance(safe, (dict, list)) else str(safe)
+                f.write(f"[{timestamp}] [{event_type}] {rendered}\n")
         except Exception:
             pass
 
