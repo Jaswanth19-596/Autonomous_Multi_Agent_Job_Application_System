@@ -1,0 +1,18 @@
+{
+  "job_id": "4448412184",
+  "ats": "LinkedIn Easy Apply",
+  "url": "https://www.linkedin.com/jobs/view/artificial-intelligence-engineer-at-aurrum-services-4448412184/",
+  "step": "Submitted",
+  "completed_fields": [
+    "Contact",
+    "Resume",
+    "Screening questions",
+    "Work authorization",
+    "Submit"
+  ],
+  "pending_fields": [],
+  "account_verified": true,
+  "last_attempted_at": "2026-08-13T08:31:10.343535+00:00",
+  "retryable": false,
+  "updated_at": "2026-08-13T08:31:10.343613+00:00"
+}

@@ -1,0 +1,17 @@
+{
+  "job_id": "4448464766",
+  "ats": "jobvite",
+  "url": "https://jobs.jobvite.com/revenuemanage/job/oITzAfwu/apply",
+  "step": "screening_questions_final",
+  "completed_fields": [
+    "personal info",
+    "EEO",
+    "screening questions"
+  ],
+  "pending_fields": [
+    "reCAPTCHA image challenge"
+  ],
+  "last_attempted_at": "2026-08-13T09:03:34.532040+00:00",
+  "retryable": false,
+  "updated_at": "2026-08-13T09:03:34.532087+00:00"
+}

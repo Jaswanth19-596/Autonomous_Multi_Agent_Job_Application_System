@@ -52,6 +52,7 @@ from src.application_semantics import (
     resolve_answers,
 )
 from src.workday_controls import build_select_workday_combobox_code
+from src.user_profile import UserProfile
 
 
 @tool
@@ -77,8 +78,13 @@ async def delegate_job_application(job_details: dict) -> dict:
     Args:
         job_details: Dict containing the full job record from get_jobs (must include 'id', 'title', 'companyName', and 'link' or 'applyUrl').
     """
-    from src.app import build_worker_graph, WORKER_SYSTEM_PROMPT, user_profile
+    from src.app import build_worker_graph, WORKER_SYSTEM_PROMPT
 
+    user_profile = UserProfile.build_user_profile(
+    "src/user_profile.json"
+)
+
+    print(user_profile)
     worker_model = worker_model_holder.get("model")
     if worker_model is None:
         raise RuntimeError("worker_model_holder is not initialized — call initialize_tools() first.")

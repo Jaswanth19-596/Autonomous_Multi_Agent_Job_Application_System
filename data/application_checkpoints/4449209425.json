@@ -1,0 +1,10 @@
+{
+  "job_id": "4449209425",
+  "ats": "unknown",
+  "url": "https://www.linkedin.com/jobs/view/artificial-intelligence-engineer-at-the-phoenix-group-4449209425?position=48&pageNum=0&refId=7cQDupwnUIWTR2NYcM6GGg%3D%3D&trackingId=OEBFxtXMf5WaADbY2b17PA%3D%3D",
+  "failure_code": "worker_stopped_without_terminal_outcome",
+  "failure_detail": "The worker ended without verified application-engine terminal evidence.",
+  "retryable": true,
+  "last_attempted_at": "2026-08-13T10:39:09.176138+00:00",
+  "updated_at": "2026-08-13T10:39:09.176200+00:00"
+}

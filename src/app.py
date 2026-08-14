@@ -139,17 +139,9 @@ with open('prompts/manager_systemprompt.md', 'r') as f:
 with open('prompts/worker_systemprompt.md', 'r') as f:
     WORKER_SYSTEM_PROMPT = f.read()
 
-with open("user_details/qna.md", "r") as f:
-    qna = f.read()
 
-reader = PdfReader("user_details/resume.pdf")
-resume = "\n".join(page.extract_text() or "" for page in reader.pages)
-
-
-user_profile = "Here is the User's profile : Resume - " + resume + "\n\nQuestions & Answers - " + qna
 
  
-
 graph = build_manager_graph()
 
 

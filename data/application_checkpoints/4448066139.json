@@ -1,0 +1,14 @@
+{
+  "job_id": "4448066139",
+  "ats": "LinkedIn Easy Apply",
+  "step": "Work authorization",
+  "url": "https://www.linkedin.com/jobs/view/4448066139/",
+  "completed_fields": [
+    "Sponsorship required = No",
+    "Legally authorized = Yes"
+  ],
+  "pending_fields": [],
+  "last_attempted_at": "2026-08-13T08:38:56.171251+00:00",
+  "retryable": false,
+  "updated_at": "2026-08-13T08:38:56.171359+00:00"
+}

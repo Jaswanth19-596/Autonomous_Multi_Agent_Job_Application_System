@@ -1,0 +1,30 @@
+{
+  "job_id": "4451822219",
+  "ats": "Eightfold AI",
+  "url": "https://bostonscientific.eightfold.ai/careers/apply?pid=563602813281186",
+  "step": "Single-page application form",
+  "completed_fields": [
+    "email",
+    "first_name",
+    "last_name",
+    "phone",
+    "address",
+    "city",
+    "state",
+    "zip",
+    "salary",
+    "source",
+    "work_authorization",
+    "visa_status",
+    "demographics",
+    "application_questions",
+    "resume_upload"
+  ],
+  "pending_fields": [
+    "Select and verify the three required Eightfold radio questions",
+    "Submit application and verify confirmation"
+  ],
+  "last_attempted_at": "2026-08-13T08:12:52.626457+00:00",
+  "retryable": false,
+  "updated_at": "2026-08-13T08:12:52.626527+00:00"
+}
