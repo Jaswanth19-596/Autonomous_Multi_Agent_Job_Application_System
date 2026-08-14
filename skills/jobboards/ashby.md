@@ -14,3 +14,8 @@ General notes for applying on Ashby-hosted job boards.
 - Success is confirmed inline via a "Success — Your application was successfully submitted"
   status message after clicking "Submit Application". Requires explicit user approval before
   clicking Submit (irreversible).
+- Embedded Ashby forms may be hosted inside an iframe on an employer careers page; scope inspection and interaction to the Ashby frame.
+- Location autocomplete fields require selecting a returned suggestion, and required multi-select relocation fields must be explicitly selected before submission.
+- For custom segmented Yes/No controls and hidden checkbox/radio inputs, clicking the associated label or visible option may be more reliable than interacting with the input directly.
+- Ashby application pages may have required custom yes/no questions for U.S. work authorization, future sponsorship, and willingness to meet an onsite schedule; inspect the hidden checkbox state and select the visible Yes/No button directly.
+- For AI/agent roles, concise responses that distinguish production LLM/agent deployment from formal customer-facing experience can accurately address prompt/agent and customer-solution narrative questions.

@@ -33,7 +33,13 @@ Always use Playwright to:
 * Inspect the application.
 * Interact with form fields.
 * Trigger Simplify Autofill:
-  - When navigating to a job application form, call `simplify_autofill` first.
+  - Simplify must be attempted once for every distinct application form step,
+    not only on the first external landing page. The runtime automatically
+    checks after navigation, tab switches, and page transitions; if it reports
+    `SIMPLIFY_SUCCESS` or `SIMPLIFY_NO_CHANGES`, do not immediately call it a
+    second time for the same form.
+  - When navigating to a job application form, call `simplify_autofill` first
+    if the automatic check has not already done so.
     It triggers Simplify within the same CDP-connected Chrome tab controlled by
     Playwright. Once triggered, inspect the page for remaining empty fields and
     fill them manually.
@@ -41,7 +47,6 @@ Always use Playwright to:
 * Navigate through application pages.
 * Submit the application.
 
-Never claim that Playwright or browser tools are unavailable.
 
 ### Playwright Tool Safety Invariants:
 * **NO EMPTY TARGETS OR SELECTORS:** Never pass an empty string (`target: ''` or `filename: ''`) to Playwright tools. Never pass empty string selectors `querySelectorAll('')` or `locator('')` in evaluate/run_code_unsafe scripts.

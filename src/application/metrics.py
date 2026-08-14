@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.parse import urlparse
 
-from src.jobs_workbook import update_job_row
+from src.data.jobs_workbook import update_job_row
 
 
 JOBS_FILE = Path("data/jobs.xlsx")

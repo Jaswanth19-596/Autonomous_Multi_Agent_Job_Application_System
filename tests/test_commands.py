@@ -3,7 +3,7 @@
 import os
 import tempfile
 
-from src.commands import (
+from src.cli.commands import (
     AgentCommandCompleter,
     COMMANDS,
     is_command,

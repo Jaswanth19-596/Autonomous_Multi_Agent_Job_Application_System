@@ -1,19 +1,20 @@
 from langgraph.graph import StateGraph, START, END, MessagesState
 from typing import TypedDict, Any
 # pyrefly: ignore [missing-import]
-from src.nodes import execution_node, tool_node, human_approval_node, user_input_node
+from src.agent.nodes import execution_node, tool_node, human_approval_node, user_input_node
 from langchain_core.messages import SystemMessage, HumanMessage
-from src.ui import show_welcome
+from src.cli.ui import show_welcome
 from rich.console import Console
 import asyncio
 from pypdf import PdfReader
 from pydantic import Field
-from src.tools import terminal, web_search, update_file, read_file, get_jobs, update_job_status, delegate_job_application, simplify_autofill, tools_by_name, worker_model_holder
+from src.agent.tools import terminal, web_search, update_file, read_file, get_jobs, update_job_status, delegate_job_application, simplify_autofill, tools_by_name, worker_model_holder
 from langchain_openrouter import ChatOpenRouter
 import os
 from mcp_client.mcp_manager import MCPManager
 
 mcp_manager = MCPManager("mcp_client/servers.json")
+MODEL_NAME = os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.6-luna")
 
 manager_tools = [delegate_job_application, get_jobs, update_job_status]
 # TEMPORARY AUTONOMOUS MODE: user-input tools are intentionally omitted while
@@ -28,7 +29,7 @@ async def shutdown():
 
 
 model = ChatOpenRouter(
-    model="openai/gpt-5.6-luna",
+    model=MODEL_NAME,
     api_key=os.environ["OPENROUTER_API_KEY"],
     # openrouter_provider={
     #     "order": ["baidu", "baseten"],
@@ -44,7 +45,7 @@ worker_model = model.bind_tools(worker_tools)
 async def initialize_tools():
     """Wires up native + MCP tools. Returns {server_name: error} for servers that failed."""
     global worker_model, worker_tools
-    from src.simplify_selenium import SimplifyBrowserError, ensure_chrome_automation
+    from src.automation.simplify_selenium import SimplifyBrowserError, ensure_chrome_automation
 
     errors = {}
     try:
@@ -184,7 +185,6 @@ async def main():
 
 if __name__ == "__main__":
     import sys
-    # Ensure 'from src.app import ...' reuses this module instead of
-    # re-importing src/app.py as a second module instance.
-    sys.modules.setdefault("src.app", sys.modules[__name__])
+    # Ensure imports reuse this module instead of creating a second instance.
+    sys.modules.setdefault("src.agent.app", sys.modules[__name__])
     asyncio.run(main())

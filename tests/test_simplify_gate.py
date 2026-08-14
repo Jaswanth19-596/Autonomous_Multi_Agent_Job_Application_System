@@ -1,6 +1,6 @@
 import json
 
-from src.simplify_gate import (
+from src.automation.simplify_gate import (
     PAGE_FINGERPRINT_CODE,
     SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE,
     authorize_simplify,

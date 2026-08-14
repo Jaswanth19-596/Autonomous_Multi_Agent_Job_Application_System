@@ -12,7 +12,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
-from src.workday_controls import CONTROL_ENGINE_JS
+from src.application.workday_controls import CONTROL_ENGINE_JS
 
 
 def _embed(value: Any) -> str:

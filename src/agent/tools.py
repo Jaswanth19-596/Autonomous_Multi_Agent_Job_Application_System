@@ -11,6 +11,7 @@ from langchain_core.tools import tool
 from langchain_tavily import TavilySearch
 from rich.console import Console
 from langchain_core.messages import SystemMessage, HumanMessage
+from pypdf import PdfReader
 
 warnings.filterwarnings("ignore", category=UserWarning, module="langchain_community.tools.shell.tool")
 warnings.filterwarnings("ignore", message=".*shell tool has no safeguards.*")
@@ -25,13 +26,13 @@ worker_model_holder = {"model": None}
 
 
 from rich.panel import Panel
-from src.ui_qna import interactive_ask_user, update_qna_file
-from src.user_profile import UserProfile
+from src.cli.ui_qna import interactive_ask_user, update_qna_file
+from src.data.user_profile import UserProfile
 
 import pandas as pd
 from pathlib import Path
 
-_BASE_DIR = Path(__file__).resolve().parent.parent
+_BASE_DIR = Path(__file__).resolve().parents[2]
 _EXCEL_PATH = _BASE_DIR / "data" / "jobs.xlsx"
 _JOBBOARD_SKILLS_DIR = _BASE_DIR / "skills" / "jobboards"
 
@@ -59,18 +60,31 @@ async def delegate_job_application(job_details: dict) -> dict:
     Args:
         job_details: Dict containing the full job record from get_jobs (must include 'id', 'title', 'companyName', and 'link' or 'applyUrl').
     """
-    from src.app import build_worker_graph, WORKER_SYSTEM_PROMPT
+    from src.agent.app import MODEL_NAME, build_worker_graph, WORKER_SYSTEM_PROMPT
+    # pyrefly: ignore [missing-import]
+    from src.automation.simplify_auto import reset_auto_simplify_attempts
 
     user_profile = UserProfile.build_user_profile(
-    "src/user_profile.json"
-)
+    str(_BASE_DIR / "data" / "user_profile.json"))
 
-    print(user_profile)
+    # read pdf resume file
+    try:
+        resume_path = '/Users/jaswanth/mydocs/myprojects/langgraph/user_details/resume.pdf'
+        if resume_path:
+            resume_text = ""
+            with open(resume_path, "rb") as f:
+                reader = PdfReader(f)
+                for page in reader.pages:
+                    resume_text += page.extract_text() or ""
+            user_profile += f"\n\nResume Text:\n{resume_text}"
+    except Exception as e:
+        console.print(f"[bold red]Error reading resume:[/bold red] {e}")
+
     worker_model = worker_model_holder.get("model")
     if worker_model is None:
         raise RuntimeError("worker_model_holder is not initialized — call initialize_tools() first.")
 
-    from src.logger import setup_job_logger, log_event
+    from src.core.logging import setup_job_logger, log_event
 
     job_id = job_details.get("id", "Unknown")
     title = job_details.get("title", "Unknown position")
@@ -110,8 +124,25 @@ async def delegate_job_application(job_details: dict) -> dict:
         "suggested_recovery_action": "Sign in to the existing candidate account and resume from the first incomplete field.",
     }
     checkpoint_store = None
+    metric_url = apply_url
+    metrics_started = False
     try:
-        from src.application_checkpoint import ApplicationCheckpointStore
+        reset_auto_simplify_attempts()
+        from src.application.metrics import (
+            fetch_openrouter_credit_snapshot,
+            start_application_metrics,
+        )
+
+        credit_snapshot = await asyncio.to_thread(fetch_openrouter_credit_snapshot)
+        start_application_metrics(
+            str(job_id),
+            apply_url,
+            credit_snapshot=credit_snapshot,
+            model=MODEL_NAME,
+        )
+        metrics_started = True
+
+        from src.application.checkpoint import ApplicationCheckpointStore
         checkpoint_store = ApplicationCheckpointStore()
         previous = checkpoint_store.load(str(job_id)) or {}
         outcome["last_completed_step"] = previous.get("last_completed_step") or previous.get("step_name")
@@ -147,6 +178,7 @@ async def delegate_job_application(job_details: dict) -> dict:
             try:
                 previous = checkpoint_store.load(str(job_id)) or {}
                 current_url = previous.get("url") or apply_url
+                metric_url = current_url
                 current_ats = previous.get("ats")
                 if current_ats in (None, "", "unknown"):
                     current_ats = "workday" if "myworkdayjobs" in str(current_url).lower() else "unknown"
@@ -161,6 +193,26 @@ async def delegate_job_application(job_details: dict) -> dict:
                 )
             except Exception as checkpoint_exc:
                 log_event("CHECKPOINT_ERROR", {"failure_detail": str(checkpoint_exc)})
+        if metrics_started:
+            try:
+                from src.application.metrics import (
+                    fetch_openrouter_credit_snapshot,
+                    finish_application_metrics,
+                )
+
+                credit_snapshot = await asyncio.to_thread(fetch_openrouter_credit_snapshot)
+                metrics = finish_application_metrics(
+                    outcome["status"],
+                    company=company,
+                    title=title,
+                    credit_snapshot=credit_snapshot,
+                    application_url=metric_url,
+                )
+                if metrics is not None:
+                    log_event("APPLICATION_METRICS", metrics)
+            except Exception as metrics_exc:
+                # Metrics must not turn a completed application into a failure.
+                log_event("APPLICATION_METRICS_ERROR", {"failure_detail": str(metrics_exc)})
     return {"job_id": str(job_id), "title": title, "company": company, **outcome}
 
 
@@ -224,8 +276,8 @@ async def simplify_autofill() -> str:
     state. Chrome remains open after success so the autofilled form can be
     reviewed in that same session.
     """
-    from src.app import mcp_manager
-    from src.simplify_selenium import SimplifyBrowserError, trigger_simplify_autofill
+    from src.agent.app import mcp_manager
+    from src.automation.simplify_selenium import SimplifyBrowserError, trigger_simplify_autofill
 
     try:
         output = await mcp_manager.call_tool(
@@ -344,28 +396,14 @@ def update_job_status(job_id: str, status: str) -> str:
             return f"No jobs file found at {_EXCEL_PATH}."
 
         try:
-            df = pd.read_excel(_EXCEL_PATH, dtype=str)
-        except Exception as exc:
-            return f"Could not read {_EXCEL_PATH}: {exc}"
-
-        if "id" not in df.columns:
-            return f"Error: 'id' column missing in {_EXCEL_PATH}."
-
-        if "application_status" not in df.columns:
-            df["application_status"] = "Not Applied"
-
-        target_id = str(job_id).strip()
-        mask = df["id"].astype(str).str.strip() == target_id
-
-        if not mask.any():
-            return f"Job with ID '{job_id}' not found in {_EXCEL_PATH}."
-
-        df.loc[mask, "application_status"] = status
-
-        try:
-            # Strip control characters forbidden in Excel XML
-            df = df.map(lambda x: re.sub(r'[\000-\010]|[\013-\014]|[\016-\037]', '', x) if isinstance(x, str) else x)
-            df.to_excel(_EXCEL_PATH, index=False)
+            from src.data.jobs_workbook import update_job_row
+            update_job_row(
+                _EXCEL_PATH,
+                str(job_id).strip(),
+                {"application_status": status},
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         except Exception as exc:
             return f"Failed to save changes to {_EXCEL_PATH}: {exc}"
 

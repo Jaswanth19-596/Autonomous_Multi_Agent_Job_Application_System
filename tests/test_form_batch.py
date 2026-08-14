@@ -1,6 +1,6 @@
 import json
 
-from src.form_batch import CLICK_NEXT_CONTROL_CODE, FORM_INSPECTION_CODE, build_batch_repair_code
+from src.application.form_batch import CLICK_NEXT_CONTROL_CODE, FORM_INSPECTION_CODE, build_batch_repair_code
 
 
 def test_inspection_collects_all_controls_and_combobox_options_in_one_loop():

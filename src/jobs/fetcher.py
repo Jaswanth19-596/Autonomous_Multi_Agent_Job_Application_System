@@ -85,12 +85,12 @@ def search_jobs(keywords, location, under10Applicants: bool = False ):
         "location": location, # string
         "geoId": "",  # string
         "distance": 0,  # int
-        "datePosted": "past24Hours",  #"anyTime", "past24Hours", "pastWeek", "pastMonth" 
+        "datePosted": "pastWeek",  #"anyTime", "past24Hours", "pastWeek", "pastMonth" 
         "companyIds": [],  # list of strings
         "under10Applicants": under10Applicants,  # boolean
         "autoConvertToAiSearch": True,  # boolean
         "scrapeCompany": True, # boolean
-        "limitPerSource": 10, # int
+        "limitPerSource": 100, # int
         "splitByLocation": False, # boolean
         "splitCountry": "US", # string
     }
@@ -109,4 +109,4 @@ def search_jobs(keywords, location, under10Applicants: bool = False ):
 
 
 if __name__ == "__main__":
-    search_jobs(keywords="AI Engineer", location="United States")
+    search_jobs(keywords="Agentic AI Engineer", location="United States")

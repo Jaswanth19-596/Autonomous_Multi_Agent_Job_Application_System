@@ -12,7 +12,7 @@ from prompt_toolkit.shortcuts import prompt
 from rich.console import Console
 
 console = Console()
-QNA_FILE_PATH = Path(__file__).resolve().parent.parent / "user_details" / "qna.md"
+QNA_FILE_PATH = Path(__file__).resolve().parents[2] / "user_details" / "qna.md"
 
 
 def update_qna_file(question: str, answer: str) -> None:

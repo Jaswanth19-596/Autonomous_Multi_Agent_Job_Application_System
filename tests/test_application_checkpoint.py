@@ -1,4 +1,4 @@
-from src.application_checkpoint import ApplicationCheckpointStore
+from src.application.checkpoint import ApplicationCheckpointStore
 
 
 def test_checkpoint_round_trip_and_sensitive_keys_are_dropped(tmp_path):

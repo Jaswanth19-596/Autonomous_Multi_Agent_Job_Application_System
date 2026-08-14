@@ -1,8 +1,10 @@
 import os
+import re
+import time
 from dotenv import load_dotenv
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage, SystemMessage
 from prompt_toolkit.history import InMemoryHistory
-from src.commands import (
+from src.cli.commands import (
     build_session,
     prompt_for_input,
     is_command,
@@ -20,6 +22,12 @@ load_dotenv()
 
 console = Console()
 history = InMemoryHistory()
+
+
+def _is_transient_read_timeout(error: Exception) -> bool:
+    """Recognize retryable transport timeouts from model/MCP streaming."""
+    text = str(error).lower()
+    return "read operation timed out" in text or "readtimeout" in text
 
 
 
@@ -119,10 +127,10 @@ def execution_node(state, config=None):
         model = config["configurable"].get("model")
 
     if model is None:
-        from src.app import manager_model
+        from src.agent.app import manager_model
         model = manager_model
 
-    from src.logger import get_job_prefix, log_event
+    from src.core.logging import get_job_prefix, log_event
 
     # pruned_msgs, num_pruned = _prune_messages(state["messages"])
     pruned_msgs, num_pruned = state["messages"], 0
@@ -131,12 +139,31 @@ def execution_node(state, config=None):
         console.print(f"{prefix}[dim cyan]⚡ Context optimized: pruned {num_pruned} old DOM payload(s)[/dim cyan]")
         log_event("TOKEN_OPT", f"Pruned {num_pruned} old DOM payload(s) from context window")
 
-    with Live(console=console, refresh_per_second=10) as live:
-        live.update(Spinner("dots", text=f"{get_job_prefix()}[bold cyan]Thinking...[/bold cyan]"))
-        for chunk in model.stream(pruned_msgs):
-            full = chunk if full is None else full + chunk
-            if chunk.content:
-                live.update(Markdown(full.content))
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        attempt_full = None
+        try:
+            with Live(console=console, refresh_per_second=10) as live:
+                live.update(Spinner("dots", text=f"{get_job_prefix()}[bold cyan]Thinking...[/bold cyan]"))
+                for chunk in model.stream(pruned_msgs):
+                    attempt_full = chunk if attempt_full is None else attempt_full + chunk
+                    if chunk.content:
+                        live.update(Markdown(attempt_full.content))
+            full = attempt_full
+            break
+        except Exception as exc:
+            if not _is_transient_read_timeout(exc) or attempt == max_attempts:
+                raise
+            delay_seconds = attempt
+            console.print(
+                f"{get_job_prefix()}[yellow]Model read timed out; retrying "
+                f"({attempt}/{max_attempts}) in {delay_seconds}s…[/yellow]"
+            )
+            log_event(
+                "MODEL_READ_TIMEOUT_RETRY",
+                {"attempt": attempt, "delay_seconds": delay_seconds},
+            )
+            time.sleep(delay_seconds)
 
     if full and full.content:
         log_event("LLM_CONTENT", full.content)
@@ -148,7 +175,7 @@ def execution_node(state, config=None):
 
 
 def format_tool_call(i, tool_call):
-    from src.logger import redact_sensitive
+    from src.core.logging import redact_sensitive
     name = tool_call.get("name", "unknown_tool")
     args = redact_sensitive(tool_call.get("args", {}))
     return f"[bold cyan]{i}. {name}[/bold cyan]\n[dim]   Args:[/dim] {args}"
@@ -186,16 +213,54 @@ def human_approval_node(state):
 
 
 async def tool_node(state):
-    from src.app import mcp_manager
-    from src.logger import get_job_prefix, log_event, redact_sensitive
-    from src.tools import tools_by_name
+    from src.agent.app import mcp_manager
+    from src.application.metrics import record_application_destination, record_tool_call
+    from src.automation.simplify_auto import (
+        FORM_SIGNATURE_CODE,
+        claim_auto_simplify_attempt,
+        form_signature_from_playwright_output,
+    )
+    from src.core.logging import get_job_prefix, log_event, redact_sensitive
+    from src.agent.tools import tools_by_name
 
     # Async because MCP tools are coroutine-only StructuredTools; ainvoke also
     # covers the sync native tools by running them in an executor.
     tool_responses = []
     prefix = get_job_prefix()
 
+    async def auto_simplify_if_new_form(tool_name: str) -> str | None:
+        """Run Simplify once when browser navigation reveals a distinct form."""
+        if not tool_name.startswith("playwright_browser_"):
+            return None
+        try:
+            signature_output = await mcp_manager.call_tool(
+                "playwright", "browser_run_code_unsafe", {"code": FORM_SIGNATURE_CODE}
+            )
+            form = form_signature_from_playwright_output(str(signature_output))
+            if form is None:
+                return None
+            signature, control_count = form
+            if not claim_auto_simplify_attempt(signature):
+                return None
+            simplify = tools_by_name.get("simplify_autofill")
+            if simplify is None:
+                return "SIMPLIFY_AUTO_SKIPPED: simplify_autofill is unavailable."
+            record_tool_call()
+            console.print(
+                f"{prefix}[bold yellow]🛠️  Automatically triggering Simplify "
+                f"for {control_count} detected form controls[/bold yellow]"
+            )
+            result = await simplify.ainvoke({})
+            log_event("AUTO_SIMPLIFY", {"control_count": control_count, "result": str(result)})
+            return str(result)
+        except Exception as exc:
+            # Detection is an optimization. The normal worker can still inspect
+            # and complete the form if an ATS rejects page inspection.
+            log_event("AUTO_SIMPLIFY_ERROR", {"failure_detail": str(exc)})
+            return None
+
     for tool_call in state["tool_calls"]:
+        record_tool_call()
         console.print(
             f"\n{prefix}[bold yellow]🛠️  Executing Tool:[/bold yellow] [bold"
             f" cyan]{tool_call['name']}[/bold cyan]"
@@ -226,8 +291,31 @@ async def tool_node(state):
         else:
             tool = tools_by_name[tool_call["name"]]
             try:
+                # A model can otherwise start filling immediately after a page
+                # transition without taking another snapshot. Run the form-step
+                # check before any action that could fill or script-fill fields.
+                pre_auto_simplify_result = None
+                if tool_call["name"] in {
+                    "playwright_browser_fill_form",
+                    "playwright_browser_file_upload",
+                    "playwright_browser_run_code_unsafe",
+                }:
+                    pre_auto_simplify_result = await auto_simplify_if_new_form(
+                        tool_call["name"]
+                    )
                 # Direct execution without gate checks
                 result = await tool.ainvoke(tool_call["args"])
+                if tool_call["name"] == "playwright_browser_navigate":
+                    record_application_destination(tool_call["args"].get("url"))
+                    destination = re.search(r"Page URL:\s*(https?://[^\s)]+)", str(result))
+                    if destination:
+                        record_application_destination(destination.group(1))
+                auto_simplify_result = (
+                    pre_auto_simplify_result
+                    or await auto_simplify_if_new_form(tool_call["name"])
+                )
+                if auto_simplify_result:
+                    result = f"{result}\n\n{auto_simplify_result}"
                 log_event("TOOL_RESULT", str(result))
             except Exception as e:
                 # Report the failure back to the model instead of killing the session.

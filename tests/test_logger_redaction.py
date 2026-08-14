@@ -1,4 +1,4 @@
-from src import logger
+from src.core import logging as logger
 
 
 def test_nested_sensitive_values_are_redacted_from_log(tmp_path, capsys):

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from src.simplify_selenium import (
+from src.automation.simplify_selenium import (
     SimplifyBrowserError,
     SimplifyChromeConfig,
     _click_simplify_autofill_control,

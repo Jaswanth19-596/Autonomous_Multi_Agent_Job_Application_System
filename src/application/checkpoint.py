@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.logger import redact_sensitive
+from src.core.logging import redact_sensitive
 
 CHECKPOINT_DIR = Path(os.getenv("APPLICATION_CHECKPOINT_DIR", "data/application_checkpoints"))
 _ALLOWED = {

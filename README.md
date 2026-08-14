@@ -17,10 +17,14 @@ FilePilot is an agentic system that interprets natural-language commands, plans 
 ```
 langgraph/
 ├── src/              # Application source
-│   ├── app.py        # Graph definition & entry point
-│   ├── nodes.py      # Graph node implementations
-│   ├── tools.py      # Tool definitions available to the LLM
-│   └── ui.py         # Welcome banner / terminal UI helpers
+│   ├── agent/        # Graph definition, nodes, and LLM-facing tools
+│   ├── application/  # Application workflow, metrics, and form semantics
+│   ├── automation/   # Browser and Simplify integrations
+│   ├── cli/          # Terminal commands and UI
+│   ├── core/         # Configuration and logging
+│   ├── data/         # Workbook and candidate-profile helpers
+│   └── jobs/         # Job discovery services
+├── mcp_client/       # MCP adapters for external services
 ├── tests/            # Unit & smoke tests
 ├── docs/             # Design & architecture docs
 ├── scripts/          # Utility scripts
@@ -61,7 +65,7 @@ operate on the exact same Chrome tab.
 ## Usage
 
 ```bash
-uv run python -m src.app
+uv run python -m src.agent.app
 ```
 
 You will see a welcome banner, then a `>` prompt. Type natural-language commands; the agent will propose terminal commands and ask for your approval before running them.
@@ -76,7 +80,7 @@ Do you approve the above operation : (y/n) y
 
 ## Architecture
 
-The graph is defined in `src/app.py` as a `StateGraph` with the following nodes:
+The graph is defined in `src/agent/app.py` as a `StateGraph` with the following nodes:
 
 ```
 START → user_input_node → execution_node

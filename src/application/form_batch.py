@@ -2,7 +2,7 @@
 
 import os
 
-from src.workday_controls import CONTROL_ENGINE_JS
+from src.application.workday_controls import CONTROL_ENGINE_JS
 
 FORM_INSPECTION_CODE = r"""
 async (page) => {

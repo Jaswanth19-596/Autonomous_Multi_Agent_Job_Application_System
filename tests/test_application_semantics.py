@@ -1,6 +1,6 @@
 import json
 
-from src.application_semantics import (
+from src.application.semantics import (
     AUDIT_PAGE_CODE, DROPDOWNS_CODE, PAGE_SCHEMA_CODE, RADIO_GROUPS_CODE, CandidateProfileStore,
     build_advance_code, build_fill_dropdowns_code, build_fill_page_code,
     build_fill_radio_groups_code, build_upload_code, resolve_answers,
