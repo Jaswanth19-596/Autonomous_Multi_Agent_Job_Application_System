@@ -40,6 +40,24 @@ uv sync
 echo "OPENROUTER_API_KEY=your_key_here" > .env
 ```
 
+### Simplify Chrome extension
+
+The app starts one Chrome instance with a local Chrome DevTools Protocol (CDP)
+endpoint. Selenium and Playwright MCP attach to it, so Simplify and the worker
+operate on the same tab. Add these values (the defaults match macOS):
+
+```bash
+SIMPLIFY_EXTENSION_ID=pbanhockgagggenencehbnadejlgchfc
+CHROME_AUTOMATION_USER_DATA_DIR="$HOME/Library/Application Support/Google/Chrome-Automation"
+CHROME_PROFILE_DIRECTORY=Default
+CHROME_DEBUGGING_PORT=9222
+```
+
+Run `uv sync` after pulling these changes. On the first run, install Simplify
+and sign in within the Chrome-Automation window. Keep the CDP endpoint local;
+it grants full control of the browser profile. The worker and Selenium then
+operate on the exact same Chrome tab.
+
 ## Usage
 
 ```bash

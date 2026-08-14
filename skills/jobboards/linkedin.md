@@ -15,6 +15,7 @@ LinkedIn job listings can either be applied via:
 7. **Submit**: On final page ("Review your application"), require explicit user confirmation before submitting if configured as dangerous, then click "Submit application".
 
 ## Reusable Learnings
+- LinkedIn Easy Apply flow for AI engineering roles may consist of Contact info, Resume upload, optional Top Choice, Review, and Submit; verify phone and upload the resume before reviewing.
 - For LinkedIn Easy Apply postings with a simple single-page form, contact information and a saved resume may be prefilled; verify the country code and phone, select the appropriate resume, and submit directly when no additional questions are present.
 - When a LinkedIn job URL initially loads the requested title but the SPA subsequently redirects to a different job listing and no job content or Easy Apply controls become available, treat the requested posting as unavailable and do not apply to the redirected listing.
 - TCS iBegin external applications may require creating a TCS Careers profile before applying; the registration form includes a CAPTCHA that must be solved interactively and may block automation.
@@ -33,3 +34,5 @@ LinkedIn job listings can either be applied via:
 1. If the job page has an **"Apply"** button that opens a new tab or redirects to an external site:
 2. Identify the external ATS platform (Greenhouse, Lever, Ashby, Workday, etc.).
 3. Read the relevant skill file `skills/jobboards/<platform>.md` if available and proceed with standard web application filling.
+- When a LinkedIn job posting page displays 'No longer accepting applications' and no Apply/Easy Apply button is rendered, the posting is closed and unapplicable; do not attempt to apply or redirect to similar live listings.
+- Always scan the job detail page for the application status message before attempting Apply; a closed posting will show an explicit status banner in place of the Apply control.

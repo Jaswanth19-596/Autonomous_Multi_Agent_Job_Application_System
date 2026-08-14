@@ -1,0 +1,9 @@
+{
+  "job_id": "4513943005",
+  "ats": "unknown",
+  "url": "https://job-boards.greenhouse.io/scaleai/jobs/4513943005",
+  "failure_code": "worker_exception",
+  "retryable": true,
+  "last_attempted_at": "2026-08-14T08:37:16.900175+00:00",
+  "updated_at": "2026-08-14T08:37:16.905805+00:00"
+}

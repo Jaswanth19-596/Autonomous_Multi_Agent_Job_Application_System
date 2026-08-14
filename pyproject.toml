@@ -24,6 +24,8 @@ dependencies = [
     "pypdf>=6.15.0",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
+    "selenium>=4.39.0",
+    "webdriver-manager>=4.0.2",
 ]
 
 [dependency-groups]

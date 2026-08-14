@@ -1,0 +1,9 @@
+{
+  "job_id": "5056867007",
+  "ats": "unknown",
+  "url": "https://job-boards.greenhouse.io/agencywithin/jobs/5056867007",
+  "failure_code": "worker_exception",
+  "retryable": true,
+  "last_attempted_at": "2026-08-14T08:54:54.480080+00:00",
+  "updated_at": "2026-08-14T08:54:54.480183+00:00"
+}

@@ -3,7 +3,9 @@
     "playwright": {
       "command": "npx",
       "args": [
-        "@playwright/mcp@0.0.79"
+        "@playwright/mcp@0.0.79",
+        "--cdp-endpoint",
+        "http://127.0.0.1:9222"
       ]
     },
     "gmail": {

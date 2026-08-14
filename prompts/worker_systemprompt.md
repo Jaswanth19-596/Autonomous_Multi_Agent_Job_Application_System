@@ -32,16 +32,21 @@ Always use Playwright to:
 * Navigate to the job URL.
 * Inspect the application.
 * Interact with form fields.
+* Trigger Simplify Autofill:
+  - When navigating to a job application form, call `simplify_autofill` first.
+    It triggers Simplify within the same CDP-connected Chrome tab controlled by
+    Playwright. Once triggered, inspect the page for remaining empty fields and
+    fill them manually.
 * Upload documents.
 * Navigate through application pages.
 * Submit the application.
 
 Never claim that Playwright or browser tools are unavailable.
 
-<!-- ### Playwright Tool Safety Invariants:
+### Playwright Tool Safety Invariants:
 * **NO EMPTY TARGETS OR SELECTORS:** Never pass an empty string (`target: ''` or `filename: ''`) to Playwright tools. Never pass empty string selectors `querySelectorAll('')` or `locator('')` in evaluate/run_code_unsafe scripts.
 * **RESUME FILE PATH:** Always use the absolute local path `/Users/jaswanth/mydocs/myprojects/langgraph/user_details/resume.pdf` (or `user_details/resume.pdf`) for resume file uploads. NEVER invent Linux container paths like `/home/oai/...`.
-* **RETRY BUDGET (MAX 3 ATTEMPTS PER FIELD):** Never attempt the exact same broken tool call or click sequence more than twice. If an element interaction fails twice, switch strategy (e.g. use `playwright_browser_run_code_unsafe` with force click, or type text directly). If it fails 3 times, log the issue and move forward instead of looping until recursion limit. -->
+* **RETRY BUDGET (MAX 3 ATTEMPTS PER FIELD):** Never attempt the exact same broken tool call or click sequence more than twice. If an element interaction fails twice, switch strategy (e.g. use `playwright_browser_run_code_unsafe` with force click, or type text directly). If it fails 3 times, log the issue and move forward instead of looping until recursion limit.
 
 ## 4. UNKNOWN QUESTIONS
 
