@@ -26,7 +26,14 @@ worker_model_holder = {"model": None}
 
 
 from rich.panel import Panel
-from src.cli.ui_qna import interactive_ask_user, update_qna_file
+from src.cli.ui_qna import (
+    PENDING_QUESTIONS_FILE_PATH,
+    QNA_FILE_PATH,
+    build_qna_context,
+    interactive_ask_user,
+    record_pending_question,
+    update_qna_file,
+)
 from src.data.user_profile import UserProfile
 
 import pandas as pd
@@ -53,6 +60,23 @@ def ask_user(question: str, options: list = None, multi_select: bool = False) ->
 
 
 @tool
+def record_pending_application_question(question: str, placeholder_answer: str) -> str:
+    """Record an unknown application question in pending_questions.json.
+
+    Use this after selecting a reasonable fallback. The user reviews this queue
+    and manually promotes confirmed answers into their profile. Do not use
+    read_file or update_file for pending_questions.json.
+    """
+    result = record_pending_question(question, placeholder_answer)
+    if result["created"]:
+        return f"Recorded pending question {result['id']} in pending_questions.json."
+    return (
+        f"Updated existing pending question {result['id']} "
+        f"(seen {result['seen_count']} times); no duplicate was added."
+    )
+
+
+@tool
 async def delegate_job_application(job_details: dict) -> dict:
     """Delegate a single job application to a worker subagent.
     The worker gets exclusive access to the browser. Jobs are processed one at a time.
@@ -66,6 +90,7 @@ async def delegate_job_application(job_details: dict) -> dict:
 
     user_profile = UserProfile.build_user_profile(
     str(_BASE_DIR / "data" / "user_profile.json"))
+    qna_context = build_qna_context()
 
     # read pdf resume file
     try:
@@ -113,6 +138,9 @@ async def delegate_job_application(job_details: dict) -> dict:
         Apply URL: {apply_url}
 
         User Profile and Resume: {user_profile}
+
+        Known user Q&A (these are user-confirmed answers only):
+        {qna_context}
     """
 
     outcome = {
@@ -240,6 +268,20 @@ def web_search(query: str):
 @tool
 def update_file(file_name: str, old_string: str, new_string):
     """Used to edit the content of the file"""
+    if not old_string:
+        return (
+            "Refused to replace an empty string: that would insert text between every "
+            "character in the file. Use a specific existing string instead."
+        )
+
+    try:
+        protected_file = Path(file_name).expanduser().resolve()
+        is_qna_file = protected_file in {QNA_FILE_PATH.resolve(), PENDING_QUESTIONS_FILE_PATH.resolve()}
+    except OSError:
+        is_qna_file = False
+    if is_qna_file:
+        return "Do not edit Q&A or pending-question storage with update_file; use the dedicated recording tool instead."
+
     with open(file_name, 'r') as f:
         content = f.read()
 
@@ -258,6 +300,14 @@ def update_file(file_name: str, old_string: str, new_string):
 @tool
 def read_file(file_name : str):
     """Used to read the file"""
+
+    try:
+        protected_file = Path(file_name).expanduser().resolve()
+        is_qna_file = protected_file in {QNA_FILE_PATH.resolve(), PENDING_QUESTIONS_FILE_PATH.resolve()}
+    except OSError:
+        is_qna_file = False
+    if is_qna_file:
+        return "Do not read Q&A or pending-question storage directly. The worker receives confirmed Q&A in its prompt."
 
     try:
         with open(file_name, 'r') as f:

@@ -1,5 +1,8 @@
 import os
 import re
+import hashlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Union
 
@@ -13,6 +16,142 @@ from rich.console import Console
 
 console = Console()
 QNA_FILE_PATH = Path(__file__).resolve().parents[2] / "user_details" / "qna.md"
+PENDING_QUESTIONS_FILE_PATH = QNA_FILE_PATH.with_name("pending_questions.json")
+
+
+def _normalize_question(question: str) -> str:
+    """Return a stable key used to prevent duplicate unanswered questions."""
+    return re.sub(r"\s+", " ", question.strip()).casefold()
+
+
+def record_pending_question(question: str, placeholder_answer: str) -> dict:
+    """Create or update one reviewable pending-question record.
+
+    Pending records are intentionally separate from confirmed profile answers.
+    Repeated sightings increment ``seen_count`` instead of duplicating the
+    question, and any distinct fallbacks are retained for the user's review.
+    """
+    clean_question = question.strip()
+    clean_answer = placeholder_answer.strip()
+    if not clean_question:
+        raise ValueError("Question must not be empty.")
+    if not clean_answer:
+        raise ValueError("Placeholder answer must not be empty.")
+
+    PENDING_QUESTIONS_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if PENDING_QUESTIONS_FILE_PATH.exists():
+        try:
+            data = json.loads(PENDING_QUESTIONS_FILE_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{PENDING_QUESTIONS_FILE_PATH.name} is not valid JSON; repair it before recording more questions."
+            ) from exc
+    else:
+        data = {"version": 1, "questions": []}
+
+    questions = data.get("questions")
+    if not isinstance(questions, list):
+        raise ValueError(f"{PENDING_QUESTIONS_FILE_PATH.name} must contain a 'questions' list.")
+
+    normalized_question = _normalize_question(clean_question)
+    now = datetime.now(timezone.utc).isoformat()
+    for entry in questions:
+        if entry.get("normalized_question") != normalized_question:
+            continue
+        answers_seen = entry.setdefault("placeholder_answers_seen", [])
+        if clean_answer not in answers_seen:
+            answers_seen.append(clean_answer)
+        entry["last_seen_at"] = now
+        entry["seen_count"] = int(entry.get("seen_count", 0)) + 1
+        _write_pending_questions(data)
+        return {"created": False, "id": entry["id"], "seen_count": entry["seen_count"]}
+
+    entry = {
+        "id": hashlib.sha256(normalized_question.encode("utf-8")).hexdigest()[:16],
+        "question": clean_question,
+        "normalized_question": normalized_question,
+        "status": "pending",
+        "placeholder_answers_seen": [clean_answer],
+        "first_seen_at": now,
+        "last_seen_at": now,
+        "seen_count": 1,
+    }
+    questions.append(entry)
+    _write_pending_questions(data)
+    return {"created": True, "id": entry["id"], "seen_count": 1}
+
+
+def _write_pending_questions(data: dict) -> None:
+    """Atomically replace the pending queue after a successful JSON update."""
+    temporary_path = PENDING_QUESTIONS_FILE_PATH.with_suffix(".tmp")
+    temporary_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temporary_path.replace(PENDING_QUESTIONS_FILE_PATH)
+
+
+def record_placeholder_question(question: str, placeholder_answer: str) -> bool:
+    """Append one canonical unanswered-Q&A block unless that question is present.
+
+    This deliberately owns the append operation.  Letting an LLM use a generic
+    string-replace tool for appends is unsafe: ``str.replace('', value)`` inserts
+    ``value`` between every character in the file.
+
+    Returns ``True`` when a new entry was added and ``False`` for a duplicate.
+    """
+    clean_question = question.strip()
+    clean_answer = placeholder_answer.strip()
+    if not clean_question:
+        raise ValueError("Question must not be empty.")
+    if not clean_answer:
+        raise ValueError("Placeholder answer must not be empty.")
+
+    QNA_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    content = QNA_FILE_PATH.read_text(encoding="utf-8") if QNA_FILE_PATH.exists() else ""
+    requested_key = _normalize_question(clean_question)
+    recorded_questions = re.findall(r"(?m)^\s*-\s*Question:\s*(.+?)\s*$", content)
+
+    if any(_normalize_question(item) == requested_key for item in recorded_questions):
+        return False
+
+    entry = (
+        ("\n" if content.strip() else "")
+        + "# NEEDS ANSWER\n"
+        f"- Question: {clean_question}\n"
+        f"- Placeholder answer used: {clean_answer}\n"
+    )
+    QNA_FILE_PATH.write_text(content.rstrip() + entry, encoding="utf-8")
+    return True
+
+
+def build_qna_context(max_entries: int = 100, max_characters: int = 8_000) -> str:
+    """Return answered Q&A entries suitable for a worker prompt.
+
+    Unanswered ``# NEEDS ANSWER`` blocks are intentionally excluded: their
+    placeholders are application fallbacks, not user-confirmed facts.  The
+    result is bounded so a damaged or unusually large qna.md cannot consume a
+    worker's context window.
+    """
+    if not QNA_FILE_PATH.exists():
+        return "No answered Q&A entries are recorded."
+
+    entries: list[str] = []
+    seen_questions: set[str] = set()
+    for line in QNA_FILE_PATH.read_text(encoding="utf-8").splitlines():
+        candidate = line.strip()
+        if not candidate or candidate.startswith(("#", "-")):
+            continue
+        match = re.match(r"^(.+?)\s+(?:=|—)\s+(.+?)$", candidate)
+        if not match:
+            continue
+        question, answer = (part.strip() for part in match.groups())
+        question_key = _normalize_question(question)
+        if not question_key or question_key in seen_questions:
+            continue
+        seen_questions.add(question_key)
+        entries.append(f"- {question}: {answer}")
+        if len(entries) >= max_entries or sum(map(len, entries)) >= max_characters:
+            break
+
+    return "\n".join(entries) if entries else "No answered Q&A entries are recorded."
 
 
 def update_qna_file(question: str, answer: str) -> None:

@@ -8,8 +8,9 @@ You are an expert job application assistant. Your job is to apply for jobs assig
   * `data/jobs.xlsx`
   * `user_details/resume.pdf`
   * `user_details/qna.md`
+  * `user_details/pending_questions.json`
 * Do NOT run shell/terminal commands (`ls`, `cd`, `cat`, `python3`, etc.) to explore directories or read local project files.
-* All necessary user profile information (Resume & Q&A) and job application details (Job ID, Title, Company, Apply URL) are already provided directly in your prompt context.
+* All necessary user profile information (Resume & known Q&A) and job application details (Job ID, Title, Company, Apply URL) are already provided directly in your prompt context.
 * The ONLY permitted file reading is `skills/jobboards/<platform>.md` via `read_file` when a jobboard skill file is relevant. -->
 
 ## 2. READ INSTRUCTIONS AND PLAN
@@ -59,10 +60,9 @@ If an application contains a question whose answer is not available in the provi
 1. Do NOT stop the application.
 2. Determine a reasonable placeholder answer when possible.
 3. Continue filling the remaining fields.
-4. Add the question to `user_details/qna.md` with:
-   * `# NEEDS ANSWER`
-   * The question
-   * The placeholder answer used
+4. Call `record_pending_application_question` once with the question and the
+   placeholder answer used. It adds or updates one pending record without
+   duplicates. Never use `read_file` or `update_file` for Q&A storage.
 
 Do not ask the user to answer questions during the application.
 
@@ -79,7 +79,8 @@ status: failed
 reason: <specific reason>
 ```
 
-Report what was completed, what was skipped, and any questions added to `qna.md`.
+Report what was completed, what was skipped, and any questions added to
+`pending_questions.json`.
 
 ## 6. UPDATE JOBBOARD SKILL
 
@@ -143,7 +144,8 @@ Once the page has been scanned, match all fields against the provided user profi
 For dropdowns, select an answer corresponding to an available option. If the exact answer is not available:
 1. Choose the closest semantically correct option.
 2. If necessary, use a reasonable fallback answer.
-3. Record the question/ambiguity in `qna.md` with `# NEEDS ANSWER`.
+3. Call `record_pending_application_question` once for each unknown question
+   or ambiguity. Never edit Q&A storage directly.
 
 ---
 
@@ -226,7 +228,7 @@ or:
 status: failed
 reason: <specific reason>
 ```
-Followed by a brief summary of completed fields, placeholder answers used, and `qna.md` entries added.
+Followed by a brief summary of completed fields, placeholder answers used, and pending-question entries added.
 
 ---
 

@@ -10,7 +10,7 @@ LinkedIn job listings can either be applied via:
 2. An overlay modal opens with multi-step sections (Contact info, Resume, Work experience, Custom questions).
 3. **Contact info**: Pre-filled from profile. Verify phone number and email (`madhajaswanth@gmail.com`).
 4. **Resume**: Select the existing resume or upload `user_details/resume.pdf` if requested.
-5. **Form fields / Questions**: Match questions against user Q&A. If unknown, add to `user_details/qna.md` with `# NEEDS ANSWER` status and fill with a reasonable fallback.
+5. **Form fields / Questions**: Match questions against user Q&A. If unknown, call `record_pending_application_question` once with the question and reasonable fallback; do not edit Q&A storage directly.
 6. **Next / Review**: Click "Next" to navigate through wizard pages.
 7. **Submit**: On final page ("Review your application"), require explicit user confirmation before submitting if configured as dangerous, then click "Submit application".
 

@@ -8,7 +8,7 @@ from rich.console import Console
 import asyncio
 from pypdf import PdfReader
 from pydantic import Field
-from src.agent.tools import terminal, web_search, update_file, read_file, get_jobs, update_job_status, delegate_job_application, simplify_autofill, tools_by_name, worker_model_holder
+from src.agent.tools import terminal, web_search, update_file, read_file, get_jobs, update_job_status, delegate_job_application, simplify_autofill, record_pending_application_question, tools_by_name, worker_model_holder
 from langchain_openrouter import ChatOpenRouter
 import os
 from mcp_client.mcp_manager import MCPManager
@@ -20,7 +20,7 @@ manager_tools = [delegate_job_application, get_jobs, update_job_status]
 # TEMPORARY AUTONOMOUS MODE: user-input tools are intentionally omitted while
 # the user is away. Re-add `ask_user` and `ask_for_missing_application_data`
 # here and in `initialize_tools()` when interactive operation is restored.
-worker_tools = [web_search, update_file, read_file, update_job_status, simplify_autofill]
+worker_tools = [web_search, update_file, read_file, update_job_status, simplify_autofill, record_pending_application_question]
 
 
 async def shutdown():
@@ -55,7 +55,7 @@ async def initialize_tools():
     errors.update(await mcp_manager.connect())
     mcp_tools = await mcp_manager.get_langchain_tools()
     # Keep interactive collection tools unavailable in temporary autonomous mode.
-    worker_tools = [web_search, update_file, read_file, update_job_status, simplify_autofill] + mcp_tools
+    worker_tools = [web_search, update_file, read_file, update_job_status, simplify_autofill, record_pending_application_question] + mcp_tools
     worker_model = model.bind_tools(worker_tools)
     worker_model_holder["model"] = worker_model
 
