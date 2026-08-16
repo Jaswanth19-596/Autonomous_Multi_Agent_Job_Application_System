@@ -163,6 +163,11 @@
       "question": "Have you worked at Exelixis before?",
       "answer": "No",
       "updated_at": "2026-08-16T13:39:56.799816+00:00"
+    },
+    "do you consent to receive text message updates from market once holdings.com, llc regarding your job application?": {
+      "question": "Do you consent to receive text message updates from Market Once Holdings.com, LLC regarding your job application?",
+      "answer": "Yes - I consent to receiving text messages",
+      "updated_at": "2026-08-16T19:01:30.254049+00:00"
     }
   }
 }

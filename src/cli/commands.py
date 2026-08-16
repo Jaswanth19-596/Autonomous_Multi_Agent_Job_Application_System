@@ -85,6 +85,11 @@ def prompt_for_input(session) -> str:
     ).strip()
 
 
+async def prompt_for_input_async(session) -> str:
+    """Async counterpart used when the Telegram listener shares the event loop."""
+    return (await session.prompt_async(HTML("<prompt>Agent ❯ </prompt>"))).strip()
+
+
 # --------------------------------------------------------------------------- #
 # Command handlers
 # --------------------------------------------------------------------------- #

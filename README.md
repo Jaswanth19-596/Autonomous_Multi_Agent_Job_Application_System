@@ -70,6 +70,18 @@ uv run python -m src.agent.app
 
 You will see a welcome banner, then a `>` prompt. Type natural-language commands; the agent will propose terminal commands and ask for your approval before running them.
 
+## Optional Telegram remote control
+
+The terminal remains the default interface. To add a private Telegram monitoring and control surface, create a bot with BotFather and set the following values in your local `.env`:
+
+```dotenv
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_ALLOWED_CHAT_ID=...
+```
+
+Only `TELEGRAM_ALLOWED_CHAT_ID` is allowed to receive events or send controls. The bot supports `/status`, `/pause`, `/resume`, `/stop`, and `/help`; ordinary messages are queued for the existing manager agent. Set `TELEGRAM_ENABLED=false` (the default) to run exactly as terminal-only.
+
 ### Example
 ```
 > list the files in my current directory

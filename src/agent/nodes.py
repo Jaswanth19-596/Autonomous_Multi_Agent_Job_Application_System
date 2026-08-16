@@ -1,12 +1,14 @@
 import os
 import re
 import time
+import asyncio
 from dotenv import load_dotenv
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage, SystemMessage
 from prompt_toolkit.history import InMemoryHistory
 from src.cli.commands import (
     build_session,
     prompt_for_input,
+    prompt_for_input_async,
     is_command,
     dispatch,
     reset_history,
@@ -52,10 +54,21 @@ DANGEROUS_TOOLS = {
 
 
 
-def user_input_node(state):
+async def user_input_node(state):
     # Interactive REPL with pop-up autocomplete, styling & history
     session = build_session(history)
-    message = prompt_for_input(session)
+    from src.runtime.services import get_runtime
+
+    runtime = get_runtime()
+    terminal_input = asyncio.ensure_future(prompt_for_input_async(session))
+    remote_input = asyncio.create_task(runtime.inputs.messages.get())
+    done, pending = await asyncio.wait(
+        {terminal_input, remote_input}, return_when=asyncio.FIRST_COMPLETED
+    )
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    message = next(iter(done)).result()
 
     # Dispatch registered slash commands directly (no LLM round-trip)
     if is_command(message):
@@ -86,6 +99,8 @@ def user_input_node(state):
             "approved": False,
         }
 
+    await runtime.controller.set_task(message)
+    await runtime.events.emit("task.started", {"task": message})
     return {"messages": [HumanMessage(content=message)]}
 
 # def _prune_messages(messages: list, min_history_to_prune: int = 24) -> tuple[list, int]:
@@ -120,7 +135,15 @@ def user_input_node(state):
 #     return pruned_msgs, num_pruned
 
 
-def execution_node(state, config=None):
+async def execution_node(state, config=None):
+    from src.runtime.services import get_runtime
+
+    runtime = get_runtime()
+    if not await runtime.controller.wait_if_paused():
+        return {
+            "messages": [HumanMessage(content="The user stopped the current autonomous task.")],
+            "tool_calls": [],
+        }
     full = None
     model = state.get("model")
     if model is None and config and "configurable" in config:
@@ -145,7 +168,7 @@ def execution_node(state, config=None):
         try:
             with Live(console=console, refresh_per_second=10) as live:
                 live.update(Spinner("dots", text=f"{get_job_prefix()}[bold cyan]Thinking...[/bold cyan]"))
-                for chunk in model.stream(pruned_msgs):
+                async for chunk in model.astream(pruned_msgs):
                     attempt_full = chunk if attempt_full is None else attempt_full + chunk
                     if chunk.content:
                         live.update(Markdown(attempt_full.content))
@@ -163,10 +186,11 @@ def execution_node(state, config=None):
                 "MODEL_READ_TIMEOUT_RETRY",
                 {"attempt": attempt, "delay_seconds": delay_seconds},
             )
-            time.sleep(delay_seconds)
+            await asyncio.sleep(delay_seconds)
 
     if full and full.content:
         log_event("LLM_CONTENT", full.content)
+        await runtime.events.emit("agent.message", {"content": full.content})
 
     return {
         "messages": [full],
@@ -181,7 +205,7 @@ def format_tool_call(i, tool_call):
     return f"[bold cyan]{i}. {name}[/bold cyan]\n[dim]   Args:[/dim] {args}"
 
 
-def human_approval_node(state):
+async def human_approval_node(state):
 
     dangerous_calls = [
         tc for tc in state["tool_calls"] if tc["name"] in DANGEROUS_TOOLS
@@ -191,15 +215,49 @@ def human_approval_node(state):
     if not dangerous_calls:
         return {"approved": True}
 
+    from prompt_toolkit import PromptSession
+    from src.runtime.services import get_runtime
+
+    runtime = get_runtime()
+
     # Only show the dangerous tool calls that need approval.
     console.print("\n[bold red]⚠️  The agent wants to perform the following dangerous action(s):[/bold red]\n")
 
     for i, tool_call in enumerate(dangerous_calls):
         console.print(format_tool_call(i, tool_call))
 
-    message = input("\nDo you approve the above operation : (y/n) ").strip().lower()
+    request = runtime.approvals.create_request(dangerous_calls)
+    await runtime.events.emit(
+        "approval.required",
+        {"approval_id": request.id, "tool_calls": dangerous_calls},
+    )
 
-    if message in ('y', 'yes'):
+    terminal_input = asyncio.ensure_future(
+        PromptSession().prompt_async("\nDo you approve the above operation : (y/n) ")
+    )
+    remote_decision = asyncio.create_task(runtime.approvals.wait_for(request.id))
+    done, pending = await asyncio.wait(
+        {terminal_input, remote_decision}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if terminal_input in done:
+        message = terminal_input.result().strip().lower()
+        runtime.approvals.resolve(request.id, message in ("y", "yes"))
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    # If the request was resolved before the terminal answer, obtain its stored result
+    # from the completed future; otherwise use the terminal decision.
+    if remote_decision.done() and not remote_decision.cancelled():
+        decision = remote_decision.result()
+    else:
+        decision = message in ("y", "yes") if terminal_input in done else False
+
+    await runtime.events.emit(
+        "approval.approved" if decision else "approval.denied",
+        {"approval_id": request.id},
+    )
+
+    if decision:
         return {
             "messages": [HumanMessage(content="The user approved the tool execution. Go ahead.")],
             "approved": True
@@ -222,11 +280,13 @@ async def tool_node(state):
     )
     from src.core.logging import get_job_prefix, log_event, redact_sensitive
     from src.agent.tools import tools_by_name
+    from src.runtime.services import get_runtime
 
     # Async because MCP tools are coroutine-only StructuredTools; ainvoke also
     # covers the sync native tools by running them in an executor.
     tool_responses = []
     prefix = get_job_prefix()
+    runtime = get_runtime()
 
     async def auto_simplify_if_new_form(tool_name: str) -> str | None:
         """Run Simplify once when browser navigation reveals a distinct form."""
@@ -260,16 +320,19 @@ async def tool_node(state):
             return None
 
     for tool_call in state["tool_calls"]:
-        record_tool_call()
-        console.print(
-            f"\n{prefix}[bold yellow]🛠️  Executing Tool:[/bold yellow] [bold"
-            f" cyan]{tool_call['name']}[/bold cyan]"
-        )
-        if tool_call.get("args"):
-            console.print(
-                f"[dim]   Args:[/dim] {redact_sensitive(tool_call['args'])}"
+        if not await runtime.controller.wait_if_paused():
+            tool_responses.append(
+                ToolMessage(
+                    content="Tool execution skipped because the user stopped the task.",
+                    tool_call_id=tool_call["id"],
+                )
             )
-
+            continue
+        record_tool_call()
+        await runtime.controller.set_tool(tool_call["name"])
+        await runtime.events.emit(
+            "tool.started", {"tool": tool_call["name"], "args": tool_call.get("args", {}), "prefix": prefix}
+        )
         log_event(
             "TOOL_CALL",
             {
@@ -283,11 +346,10 @@ async def tool_node(state):
                 f"Error: no such tool '{tool_call['name']}'. Available"
                 f" tools: {', '.join(sorted(tools_by_name))}"
             )
-            console.print(
-                f"{prefix}[bold red]❌ No such tool"
-                f" '{tool_call['name']}'[/bold red]"
-            )
             log_event("TOOL_ERROR", result)
+            await runtime.events.emit(
+                "tool.failed", {"tool": tool_call["name"], "args": tool_call.get("args", {}), "error": result, "prefix": prefix}
+            )
         else:
             tool = tools_by_name[tool_call["name"]]
             try:
@@ -317,17 +379,28 @@ async def tool_node(state):
                 if auto_simplify_result:
                     result = f"{result}\n\n{auto_simplify_result}"
                 log_event("TOOL_RESULT", str(result))
+                await runtime.events.emit(
+                    "tool.completed",
+                    {
+                        "tool": tool_call["name"],
+                        "args": tool_call.get("args", {}),
+                        "result": str(result),
+                        "notify_completion": tool_call["name"] in {"delegate_job_application", "update_job_status"},
+                    },
+                )
             except Exception as e:
                 # Report the failure back to the model instead of killing the session.
-                console.print(
-                    f"{prefix}[red]Tool '{tool_call['name']}' failed: {e}[/red]"
-                )
                 result = f"Error: tool '{tool_call['name']}' failed: {e}"
                 log_event("TOOL_ERROR", str(e))
+                await runtime.events.emit(
+                    "tool.failed",
+                    {"tool": tool_call["name"], "args": tool_call.get("args", {}), "error": str(e), "prefix": prefix},
+                )
 
         tool_responses.append(
             ToolMessage(content=str(result), tool_call_id=tool_call["id"])
         )
+        await runtime.controller.set_tool(None)
 
     return {"messages": tool_responses}
 

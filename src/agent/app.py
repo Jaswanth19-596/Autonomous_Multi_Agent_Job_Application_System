@@ -29,6 +29,9 @@ from src.agent.tools import (
 from langchain_openrouter import ChatOpenRouter
 import os
 from mcp_client.mcp_manager import MCPManager
+from src.notifications.telegram_service import TelegramConfig, TelegramService
+from src.notifications.console_notifier import RichConsoleNotifier
+from src.runtime.services import AgentRuntime, configure_runtime
 
 mcp_manager = MCPManager("mcp_client/servers.json")
 MODEL_NAME = os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.6-luna")
@@ -200,17 +203,27 @@ graph = build_manager_graph()
 
 
 async def main():
+    runtime = AgentRuntime()
+    configure_runtime(runtime)
+    runtime.events.subscribe(RichConsoleNotifier(console))
+    telegram_config = TelegramConfig.from_env()
+    telegram = TelegramService(telegram_config, runtime) if telegram_config else None
 
     show_welcome()
 
-    with console.status("[cyan]Connecting to tools (MCP servers)...[/cyan]"):
-        errors = await initialize_tools()
-
-    for name, error in errors.items():
-        console.print(f"[yellow]Warning: MCP server '{name}' unavailable, continuing without it.[/yellow]")
-        console.print(f"[dim]  {error}[/dim]")
+    if telegram:
+        await telegram.start()
+    await runtime.controller.start()
+    await runtime.events.emit("agent.started", {})
 
     try:
+        with console.status("[cyan]Connecting to tools (MCP servers)...[/cyan]"):
+            errors = await initialize_tools()
+
+        for name, error in errors.items():
+            console.print(f"[yellow]Warning: MCP server '{name}' unavailable, continuing without it.[/yellow]")
+            console.print(f"[dim]  {error}[/dim]")
+
         await graph.ainvoke(
             {
                 "messages": [SystemMessage(content = MANAGER_SYSTEM_PROMPT)],
@@ -218,8 +231,14 @@ async def main():
             },
             config={"recursion_limit": 200}
         )
-
+    except Exception as exc:
+        await runtime.events.emit("system.error", {"error": str(exc)})
+        raise
     finally:
+        await runtime.controller.complete()
+        await runtime.events.emit("agent.completed", {})
+        if telegram:
+            await telegram.stop()
         await shutdown()
 
 

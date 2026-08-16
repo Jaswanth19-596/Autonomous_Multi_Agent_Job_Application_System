@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from langchain_community.tools import ShellTool
-from langchain_core.tools import tool
+from langchain_core.tools import StructuredTool, tool
 from langchain_tavily import TavilySearch
 from rich.console import Console
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -26,6 +26,7 @@ worker_model_holder = {"model": None}
 
 
 from rich.panel import Panel
+from prompt_toolkit import PromptSession
 from src.application.profile_answers import save_application_answer
 from src.data.user_profile import UserProfile
 
@@ -37,14 +38,7 @@ _EXCEL_PATH = _BASE_DIR / "data" / "jobs.xlsx"
 _JOBBOARD_SKILLS_DIR = _BASE_DIR / "skills" / "jobboards"
 
 
-@tool
-def ask_for_profile_answer(question: str, options: list[str] | None = None) -> str:
-    """Ask the user an unknown application question and save their exact answer.
-
-    This tool blocks for terminal input. Use it instead of guessing or using a
-    placeholder answer. The confirmed answer is saved to user_profile.json and
-    will be included in future application prompts.
-    """
+def _show_profile_question(question: str, options: list[str] | None) -> None:
     console.print("\n[bold yellow]Application question needs your answer[/bold yellow]")
     console.print(f"[bold]{question.strip()}[/bold]")
     if options:
@@ -52,14 +46,60 @@ def ask_for_profile_answer(question: str, options: list[str] | None = None) -> s
         for option in options:
             console.print(f"  - {option}")
 
+
+def _ask_for_profile_answer_sync(question: str, options: list[str] | None = None) -> str:
+    """CLI fallback kept for direct/synchronous tool callers."""
+    _show_profile_question(question, options)
     answer = ""
     while not answer:
         answer = input("Your answer: ").strip()
         if not answer:
             console.print("[yellow]Please enter an answer.[/yellow]")
+    saved_answer = save_application_answer(question, answer)
+    return f"User answered and saved to user_profile.json: '{saved_answer}'"
+
+
+async def _ask_for_profile_answer_async(question: str, options: list[str] | None = None) -> str:
+    """Async path used by LangGraph; it accepts terminal or Telegram answers."""
+    from src.runtime.services import get_runtime
+
+    runtime = get_runtime()
+    _show_profile_question(question, options)
+
+    pending = runtime.inputs.create_question(question, options)
+    await runtime.events.emit(
+        "agent.question",
+        {"question_id": pending.id, "question": question, "options": list(pending.options)},
+    )
+    terminal_input = asyncio.ensure_future(PromptSession().prompt_async("Your answer: "))
+    remote_answer = asyncio.create_task(runtime.inputs.wait_for_question(pending.id))
+    done, waiting = await asyncio.wait(
+        {terminal_input, remote_answer}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if terminal_input in done:
+        terminal_answer = terminal_input.result().strip()
+        if terminal_answer:
+            await runtime.inputs.submit_message(terminal_answer)
+    for task in waiting:
+        task.cancel()
+    await asyncio.gather(*waiting, return_exceptions=True)
+    if remote_answer.done() and not remote_answer.cancelled():
+        answer = remote_answer.result() or ""
+    else:
+        answer = terminal_answer if terminal_input in done else ""
+    if not answer:
+        return "The user did not provide an answer. Ask again or continue without guessing."
 
     saved_answer = save_application_answer(question, answer)
     return f"User answered and saved to user_profile.json: '{saved_answer}'"
+
+
+ask_for_profile_answer = StructuredTool.from_function(
+    func=_ask_for_profile_answer_sync,
+    coroutine=_ask_for_profile_answer_async,
+    name="ask_for_profile_answer",
+    description="Ask the user an unknown application question and save their exact answer.",
+)
 
 
 @tool
@@ -100,6 +140,15 @@ async def delegate_job_application(job_details: dict) -> dict:
     title = job_details.get("title", "Unknown position")
     company = job_details.get("companyName", "Unknown company")
     apply_url = job_details.get("link") or job_details.get("applyUrl")
+    from src.runtime.services import get_runtime
+
+    runtime = get_runtime()
+    await runtime.controller.set_task(
+        "Job application", f"{company} — {title}"
+    )
+    await runtime.events.emit(
+        "job.started", {"job_id": str(job_id), "company": company, "title": title}
+    )
 
     log_file = setup_job_logger(job_id, company, title)
 
@@ -177,10 +226,17 @@ async def delegate_job_application(job_details: dict) -> dict:
             "message": last_message,
         })
         console.print(f"[bold green]✅ Worker Finished Job {job_id}:[/bold green] {last_message}\n")
+        await runtime.events.emit(
+            "job.completed", {"job_id": str(job_id), "company": company, "title": title}
+        )
 
     except Exception as exc:
         outcome["failure_detail"] = str(exc)
         console.print(f"[bold red]❌ Worker Failed Job {job_id}:[/bold red] {exc}\n")
+        await runtime.events.emit(
+            "job.failed",
+            {"job_id": str(job_id), "company": company, "title": title, "error": str(exc)},
+        )
     finally:
         final_event = {"job_id": str(job_id), **outcome}
         log_event("APPLICATION_OUTCOME", final_event)
@@ -651,4 +707,3 @@ def update_job_status(job_id: str, status: str) -> str:
 # def get_quality_answer(question: str) -> str:
 
 #     pass
-
