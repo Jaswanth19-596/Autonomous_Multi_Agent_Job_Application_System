@@ -15,3 +15,4 @@
 - Greenhouse may display a Simplify banner stating that the job was already applied to; treat that as an existing successful application and avoid submitting a duplicate.
 - The 'Autofill my application' (Simplify) button may open a separate MyGreenhouse tab for authentication; you can proceed filling the Greenhouse form manually in the original tab.
 - On Greenhouse forms with a required Location (City) React Select, clear any autofill text completely, type the city slowly, then choose the exact `City, State, United States` option from the visible role=option list before submitting.
+- Embedded Greenhouse forms on employer-branded career pages may be inside a cross-origin iframe; inspect and interact through the form frame. Required React Select values can be committed by selecting the exact visible `role=option`, and the same frame contains the final submit button and confirmation text.

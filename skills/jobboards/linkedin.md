@@ -7,14 +7,19 @@ LinkedIn job listings can either be applied via:
 
 ## Easy Apply Workflow
 1. Locate and click the **"Easy Apply"** button on the job page.
+2. For Easy apply, DO NOT CALL SIMPLIFY AUTOFILL. It is not needed.
 2. An overlay modal opens with multi-step sections (Contact info, Resume, Work experience, Custom questions).
 3. **Contact info**: Pre-filled from profile. Verify phone number and email (`madhajaswanth@gmail.com`).
 4. **Resume**: Select the existing resume or upload `user_details/resume.pdf` if requested.
-5. **Form fields / Questions**: Match questions against user Q&A. If unknown, call `record_pending_application_question` once with the question and reasonable fallback; do not edit Q&A storage directly.
+5. **Form fields / Questions**: Match questions against the user profile. If unknown, call `ask_for_profile_answer` with the exact question and available options, then use the user's response.
 6. **Next / Review**: Click "Next" to navigate through wizard pages.
 7. **Submit**: On final page ("Review your application"), require explicit user confirmation before submitting if configured as dangerous, then click "Submit application".
 
 ## Reusable Learnings
+
+- LinkedIn Easy Apply can route to a Workable-powered six-page wizard: Contact info, Resume, Work experience, Education, Additional Questions, and Review. Uploading `/Users/jaswanth/mydocs/myprojects/langgraph/user_details/resume.pdf` works; city fields may require selecting an autocomplete suggestion before Next.
+- Workable LinkedIn forms may render long-form custom questions as textboxes even when the prompt lists answer choices or multi-select requirements. Fill the textbox with the exact selected answer(s), separated by commas for multi-select, then use Review.
+- Some LinkedIn external-apply links route to a company-branded custom form rather than Easy Apply or a standard ATS. The Roku form required contact details, resume upload, LinkedIn/website URLs, source, work authorization, sponsorship, location autocomplete/text, and a truthfulness acknowledgment. The form's Apply toggle may need to be clicked twice when the CTA is initially collapsed; after upload and exact required selections, confirmation text appears inline.
 - Some LinkedIn external-apply links embed a legacy ASP.NET application form in an iframe; if the form endpoint returns HTTP 500 with a database connection-pool timeout on repeated loads, the application is blocked by the external system and should be reported as failed rather than retried indefinitely.
 - LinkedIn Easy Apply can terminate the wizard immediately after a required export-control/ITAR eligibility answer; answer US-person questions truthfully and stop when the candidate is ineligible.
 
@@ -51,4 +56,5 @@ LinkedIn job listings can either be applied via:
 - A Saragossa Easy Apply flow used four pages: Contact info, Resume, Work authorization, and Review. The saved resume may be preselected; uploading the provided PDF is also supported and produces a successful-upload notification. For candidates on F-1 OPT who will need future employment sponsorship, answer Yes to the sponsorship question, then review and submit.
 - Staffing Spot Easy Apply flow via PyjamaHR consisted of four pages: Contact info (phone and city autocomplete), saved resume selection, work experience review, and final review. The saved AI/ML resume was preselected; selecting the city autocomplete suggestion and proceeding through Review led to successful submission.
 - VBeyond Easy Apply flow used four pages: Contact info, resume upload, Additional Questions, and Review. Required experience questions accepted concise numeric text answers; uploading the PDF produced a successful-upload notification, and the final confirmation stated the application was sent.
-- Top Stack Group external applications use a short Boostie-hosted flow: email, contact information with resume upload, eligibility/sponsorship questions, availability date, onsite preference, review, and submit. For F-1 OPT candidates, answer US/Canada work eligibility Yes, future sponsorship Yes, and onsite preference according to the candidate profile.
+- Top Stack Group external applications use a short Boostie-hosted flow: email, contact information with resume upload, eligibility/sponsorship questions, availability date, onsite preference, review, and submit.
+- Alight external applications use a multi-step portal: personal information and resume upload, work/education, application questions, voluntary EEO, disability, and review. The portal can parse the uploaded PDF into experience and education fields, but verify dates, degree, GPA, location, and social URLs. For F-1 OPT, answer US work authorization Yes and future sponsorship Yes. Required background/drug screening, prior employment, relative, EEO, and disability questions may need explicit profile answers; select the portal's exact option values. On review, target the application submit button by its distinguishing attribute (such as `atm-id="submit-button"`) because Simplify may inject a second similarly named submit control. For F-1 OPT candidates, answer US/Canada work eligibility Yes, future sponsorship Yes, and onsite preference according to the candidate profile.

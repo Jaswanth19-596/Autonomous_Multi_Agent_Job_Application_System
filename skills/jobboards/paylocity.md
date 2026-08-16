@@ -31,5 +31,5 @@ Paylocity runs its own ATS at `https://<customer>.paylocity.com/Recruiting/...` 
 - **"This appears to be an invalid email" warning** sometimes shows after resume auto-parse even for valid addresses; re-typing the email clears it.
 - **Acknowledgement checkbox**: after checking, a stale "Please accept the acknowledgement" inline warning may linger even though the checkbox state is truly `checked`; clicking Submit still succeeds (navigates to `/Recruiting/Jobs/Success/{id}`).
 - **Certifications & Awards** is a tag input: type text and press Enter for each award; tags appear as removable chips.
-- **Step 2 extra questions** are all plain radio lists (previously interviewed, sponsorship, non-compete, US residency) - answered No/No/No/Yes-live-in-US per qna.md.
+- **Step 2 extra questions** are all plain radio lists (previously interviewed, sponsorship, non-compete, US residency) - use confirmed profile details only; ask the user for any unknown answer.
 - Old findings confirmed: custom dropdowns are React Widgets (open the combobox, click `role=option`), and Step 3 demographics can be skipped entirely.

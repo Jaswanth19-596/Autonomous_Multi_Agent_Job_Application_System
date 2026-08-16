@@ -95,6 +95,119 @@ CONTROL_ENGINE_JS = r"""
 """
 
 
+# Workday may turn the source question into a chain such as
+# ``How did you hear about us? -> LinkedIn -> LinkedIn Job Search``.  This
+# program deliberately follows only controls belonging to that chain.  It is
+# kept as one browser round-trip so the model cannot get caught repeatedly
+# opening and closing transient Workday menus.
+WORKDAY_HEAR_ABOUT_US_CODE = r"""
+async (page) => {
+  const clean = value => String(value ?? '').trim().replace(/\s+/g, ' ');
+  const steps = [];
+
+  const host = await page.evaluate(() => location.hostname);
+  if (!/(?:myworkdayjobs|workday)/i.test(host)) {
+    return JSON.stringify({status: 'unresolved', reason: 'active page is not Workday', steps});
+  }
+
+  const sourceField = page.locator('[data-automation-id="formField-source"]').first();
+  if (!await sourceField.count()) {
+    return JSON.stringify({status: 'unresolved', reason: 'Workday source field was not found', steps});
+  }
+
+  const sourceInput = sourceField.locator('#source--source').first();
+  if (!await sourceInput.isVisible().catch(() => false)) {
+    return JSON.stringify({status: 'unresolved', reason: 'Workday source search input was not visible', steps});
+  }
+
+  const instruction = sourceField.locator('[data-automation-id="promptAriaInstruction"]').first();
+  const waitForState = async (text, timeout = 4000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const current = clean(await instruction.textContent().catch(() => ''));
+      if (current === text) return true;
+      await page.waitForTimeout(100);
+    }
+    return false;
+  };
+
+  // Open the picker.
+  await sourceInput.click({timeout: 5000});
+  if (!await waitForState('Expanded', 3000)) {
+    const icon = sourceField.locator(
+      '[data-automation-id="promptSearchButton"], [data-uxi-selectinputicon-type="promptIcon"]'
+    ).first();
+    if (await icon.isVisible().catch(() => false)) await icon.click({timeout: 5000});
+    if (!await waitForState('Expanded', 3000)) {
+      return JSON.stringify({status: 'unresolved', reason: 'Workday source picker never expanded', steps});
+    }
+  }
+
+  // Options can render in a portal outside sourceField — resolve the real
+  // popup via aria-owns/aria-controls on the input rather than assuming
+  // it's a DOM descendant of the field wrapper.
+  const owned = (await sourceInput.getAttribute('aria-owns')) || (await sourceInput.getAttribute('aria-controls'));
+  const popupId = owned ? owned.split(/\s+/)[0] : null;
+  const popup = popupId ? page.locator(`#${popupId}`) : page;
+
+  const placeholderPattern = /^(?:select|choose|please select|search|--|none|n\/a)(?:\s|$)/i;
+
+  for (let depth = 1; depth <= 8; depth++) {
+    // Leaf level: real radios.
+    const radios = popup.locator('input[type="radio"]:visible, [role="radio"]:visible');
+    for (let index = 0; index < await radios.count(); index++) {
+      const radio = radios.nth(index);
+      const option = clean(await radio.evaluate(el =>
+        el.getAttribute('aria-label') ||
+        (el.labels && Array.from(el.labels).map(l => l.innerText).join(' ')) ||
+        el.closest('label')?.innerText || el.parentElement?.innerText || el.textContent
+      ));
+      if (!option || placeholderPattern.test(option)) continue;
+      const native = await radio.evaluate(el => el.matches('input[type="radio"]'));
+      if (native) {
+        await radio.check({timeout: 5000}).catch(async () => {
+          await radio.evaluate(el => (el.closest('label') || el).click());
+        });
+        if (!await radio.isChecked().catch(() => false)) continue;
+      } else {
+        await radio.click({timeout: 5000});
+        if (await radio.getAttribute('aria-checked') !== 'true') continue;
+      }
+      steps.push({depth, option, kind: 'radio_leaf'});
+      await waitForState('Minimized', 3000);
+      return JSON.stringify({status: 'selected', steps, depth});
+    }
+
+    // No leaf yet — this is a category row (chevron), not a radio. Click the
+    // first real one instead of blindly pressing Enter.
+    const rows = popup.locator('[role="option"]:visible, [data-automation-id="promptOption"]:visible, li:visible');
+    let clicked = false;
+    for (let index = 0; index < await rows.count(); index++) {
+      const row = rows.nth(index);
+      const text = clean(await row.innerText().catch(() => ''));
+      if (!text || placeholderPattern.test(text)) continue;
+      await row.click({timeout: 5000});
+      steps.push({depth, option: text, kind: 'category'});
+      clicked = true;
+      break;
+    }
+    if (!clicked) {
+      const debug = await popup.locator('[role="listbox"]:visible, [role="menu"]:visible').first()
+        .evaluate(el => el.outerHTML.slice(0, 400)).catch(() => 'no popup found');
+      return JSON.stringify({
+        status: 'unresolved',
+        reason: `no selectable category or leaf option found — popup snapshot: ${debug}`,
+        steps,
+      });
+    }
+    await page.waitForTimeout(400);
+  }
+
+  return JSON.stringify({status: 'unresolved', reason: 'source hierarchy exceeded max depth', steps});
+}
+"""
+
+
 def build_select_workday_combobox_code(control_id: str, desired_option: str) -> str:
     """Select and verify a searchable Workday combobox by stable textbox id."""
     return (r"""

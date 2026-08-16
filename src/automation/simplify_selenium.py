@@ -63,6 +63,16 @@ class SimplifyAutofillResult:
         return max(0, self.filled_after - self.filled_before)
 
 
+@dataclass(frozen=True)
+class SimplifySkillsAutofillResult:
+    """Outcome of Simplify's select-all-skills autofill workflow."""
+
+    url: str
+    selected_count: int | None
+    completion: str
+    elapsed_seconds: float
+
+
 def default_chrome_automation_user_data_dir(system: str | None = None) -> str:
     """Return a non-default profile suitable for local CDP automation."""
     system = system or platform.system()
@@ -151,13 +161,181 @@ def _click_simplify_autofill_control(driver: Any) -> str | None:
 
     Chrome DevTools keyboard events are delivered to the renderer and cannot be
     relied on to invoke a Chrome extension command. Simplify already injects an
-    ``Autofill This Page`` button into supported applications, so click that
-    control directly instead.
+    action button into supported applications. Its label differs by Simplify
+    version, so recognize the supported action labels while avoiding similarly
+    named controls rendered by the underlying ATS page.
     """
     return driver.execute_script(
         r"""
         const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
         const isVisible = element => {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden'
+            && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+        };
+        const roots = [];
+        const seen = new Set();
+        const simplifyHost = element => element && element.matches(
+          '[class*="simplify" i], [id*="simplify" i], [data-testid*="simplify" i], [data-simplify-extension], [data-simplify-overlay]'
+        );
+        const simplifyElement = element => element && (
+          simplifyHost(element) || Boolean(element.closest(
+            '[class*="simplify" i], [id*="simplify" i], [data-testid*="simplify" i], [data-simplify-extension], [data-simplify-overlay]'
+          ))
+        );
+        const visit = (root, simplifyOwned = false) => {
+          if (!root || seen.has(root)) return;
+          seen.add(root);
+          const owned = simplifyOwned || simplifyHost(root.host);
+          roots.push({root, simplifyOwned: owned});
+          for (const node of root.querySelectorAll('*')) {
+            if (node.shadowRoot) visit(node.shadowRoot, owned || simplifyHost(node));
+          }
+        };
+        visit(document);
+
+        const candidates = [];
+        const actionScore = label => {
+          if (/autofill\s+this\s+page/i.test(label)) return 90;
+          if (/autofill\s+my\s+application/i.test(label)) return 80;
+          if (/auto(?:fill+|flll)\s+this\s+form/i.test(label)) return 70;
+          if (/run\s+autofill\s+again/i.test(label)) return 60;
+          if (/(?:^|\s)autofill(?:\s|$)/i.test(label)) return 50;
+          if (/continue\s+application/i.test(label)) return 40;
+          if (/create\s+account/i.test(label)) return 30;
+          if (/sign\s+in/i.test(label)) return 20;
+          return 0;
+        };
+        for (const {root, simplifyOwned} of roots) {
+          for (const element of root.querySelectorAll(
+            '#fill-button, button, [role="button"], a'
+          )) {
+            const label = clean([
+              element.getAttribute('aria-label'),
+              element.innerText,
+              element.textContent,
+              element.getAttribute('title')
+            ].filter(Boolean).join(' '));
+            if (!isVisible(element) || element.disabled ||
+                element.getAttribute('aria-disabled') === 'true') continue;
+            const score = element.id === 'fill-button' ? 100 : actionScore(label);
+            // Labels such as "Sign in" are generic on ATS pages. Accept them
+            // only from Simplify's shadow tree; #fill-button is a trusted
+            // extension-specific identifier even when rendered in light DOM.
+            if (score && (element.id === 'fill-button' || simplifyOwned || simplifyElement(element))) {
+              candidates.push({element, label, score});
+            }
+          }
+        }
+        candidates.sort((a, b) => b.score - a.score);
+        const selected = candidates[0];
+        if (!selected) return null;
+        selected.element.click();
+        return selected.label || 'Simplify Autofill';
+        """
+    )
+
+
+def _click_simplify_skills_dropdown(driver: Any) -> bool:
+    """Open Simplify's ``Select skills to autofill`` menu, if present.
+
+    Simplify renders the panel in nested open shadow roots.  The selector is
+    deliberately label-based: Workday has no equivalent control, so this
+    cannot accidentally operate on a native Workday field.
+    """
+    return bool(
+        driver.execute_script(
+            r"""
+            const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+            const visible = element => {
+              const style = getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              return style.display !== 'none' && style.visibility !== 'hidden'
+                && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+            };
+            const roots = [];
+            const seen = new Set();
+            const visit = root => {
+              if (!root || seen.has(root)) return;
+              seen.add(root);
+              roots.push(root);
+              for (const node of root.querySelectorAll('*')) {
+                if (node.shadowRoot) visit(node.shadowRoot);
+              }
+            };
+            visit(document);
+
+            for (const root of roots) {
+              for (const element of root.querySelectorAll(
+                'button, [role="button"], input, [role="combobox"]'
+              )) {
+                const text = clean([
+                  element.getAttribute('aria-label'), element.getAttribute('placeholder'),
+                  element.innerText, element.textContent, element.getAttribute('title')
+                ].filter(Boolean).join(' '));
+                if (visible(element) && !element.disabled &&
+                    /^select skills to autofill(?:\s|$)/i.test(text)) {
+                  element.click();
+                  return true;
+                }
+              }
+            }
+            return false;
+            """
+        )
+    )
+
+
+def _click_simplify_select_all_skills(driver: Any) -> bool:
+    """Select the explicit ``Select all`` entry in Simplify's skills menu."""
+    return bool(
+        driver.execute_script(
+            r"""
+            const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+            const visible = element => {
+              const style = getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              return style.display !== 'none' && style.visibility !== 'hidden'
+                && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+            };
+            const roots = [];
+            const seen = new Set();
+            const visit = root => {
+              if (!root || seen.has(root)) return;
+              seen.add(root);
+              roots.push(root);
+              for (const node of root.querySelectorAll('*')) {
+                if (node.shadowRoot) visit(node.shadowRoot);
+              }
+            };
+            visit(document);
+
+            for (const root of roots) {
+              for (const element of root.querySelectorAll(
+                'button, [role="button"], [role="option"], li, a, div'
+              )) {
+                const text = clean([
+                  element.getAttribute('aria-label'), element.innerText, element.textContent
+                ].filter(Boolean).join(' '));
+                if (visible(element) && !element.disabled && /^select all$/i.test(text)) {
+                  element.click();
+                  return true;
+                }
+              }
+            }
+            return false;
+            """
+        )
+    )
+
+
+def _click_simplify_autofill_skills_button(driver: Any) -> int | None:
+    """Click Simplify's all-skills confirmation button and return its count."""
+    result = driver.execute_script(
+        r"""
+        const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+        const visible = element => {
           const style = getComputedStyle(element);
           const rect = element.getBoundingClientRect();
           return style.display !== 'none' && style.visibility !== 'hidden'
@@ -177,31 +355,65 @@ def _click_simplify_autofill_control(driver: Any) -> str | None:
 
         const candidates = [];
         for (const root of roots) {
-          for (const element of root.querySelectorAll(
-            '#fill-button, button, [role="button"], a'
-          )) {
-            const label = clean([
-              element.getAttribute('aria-label'),
-              element.innerText,
-              element.textContent,
+          for (const element of root.querySelectorAll('button, [role="button"], a')) {
+            const text = clean([
+              element.getAttribute('aria-label'), element.innerText, element.textContent,
               element.getAttribute('title')
             ].filter(Boolean).join(' '));
-            if (!isVisible(element) || element.disabled ||
-                element.getAttribute('aria-disabled') === 'true') continue;
-            const exact = element.id === 'fill-button' ||
-              /autofill\s+(this\s+page|my\s+application)/i.test(label);
-            if (exact) candidates.push({element, label});
+            const match = text.match(/^autofill\s+(\d+)\s+skills?$/i);
+            if (visible(element) && !element.disabled && match) {
+              candidates.push({ element, count: Number(match[1]) });
+            }
           }
         }
-        candidates.sort((a, b) => {
-          const score = candidate => candidate.element.id === 'fill-button' ? 2
-            : /autofill\s+this\s+page/i.test(candidate.label) ? 1 : 0;
-          return score(b) - score(a);
-        });
-        const selected = candidates[0];
-        if (!selected) return null;
-        selected.element.click();
-        return selected.label || 'Simplify Autofill';
+        if (!candidates.length) return null;
+        candidates.sort((a, b) => b.count - a.count);
+        candidates[0].element.click();
+        return candidates[0].count;
+        """
+    )
+    return int(result) if result is not None else None
+
+
+def _simplify_skills_autofill_status(driver: Any) -> dict[str, bool | str]:
+    """Read only completion signals from the Simplify skills panel."""
+    return driver.execute_script(
+        r"""
+        const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+        const visible = element => {
+          const style = getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden'
+            && Number(style.opacity) !== 0 && rect.width > 0 && rect.height > 0;
+        };
+        const roots = [];
+        const seen = new Set();
+        const visit = root => {
+          if (!root || seen.has(root)) return;
+          seen.add(root);
+          roots.push(root);
+          for (const node of root.querySelectorAll('*')) {
+            if (node.shadowRoot) visit(node.shadowRoot);
+          }
+        };
+        visit(document);
+
+        const text = roots.map(root => clean(root.innerText || root.textContent))
+          .filter(Boolean).join(' ').slice(0, 4000);
+        const selectorVisible = roots.some(root => Array.from(root.querySelectorAll(
+          'button, [role="button"], input, [role="combobox"]'
+        )).some(element => {
+          const label = clean([
+            element.getAttribute('aria-label'), element.getAttribute('placeholder'),
+            element.innerText, element.textContent
+          ].filter(Boolean).join(' '));
+          return visible(element) && /^select skills to autofill(?:\s|$)/i.test(label);
+        }));
+        return {
+          complete: /autofill (?:is )?complete|skills? (?:were |have been )?autofilled/i.test(text),
+          selector_visible: selectorVisible,
+          text
+        };
         """
     )
 
@@ -328,6 +540,85 @@ def trigger_simplify_autofill(
             filled_before=filled_before,
             filled_after=filled_after,
             control=control,
+        )
+    except Exception:
+        # This session is shared with Playwright MCP; never quit it here.
+        raise
+
+
+def trigger_simplify_all_skills_autofill(
+    application_url: str,
+    config: SimplifyChromeConfig | None = None,
+) -> SimplifySkillsAutofillResult:
+    """Ask Simplify to autofill every skill it found for the active Workday job.
+
+    This is intentionally a separate action from the ordinary page autofill.
+    It is safe to call only after the worker has observed Simplify's visible
+    ``Select skills to autofill`` prompt.  After confirming all skills, the
+    extension can take several minutes, so this function owns the wait rather
+    than letting the worker issue browser actions against a changing page.
+    """
+    config = config or SimplifyChromeConfig.from_environment()
+    _validate_config(config, application_url)
+    ensure_chrome_automation(config)
+    driver = _attach_driver(config)
+    start = time.monotonic()
+    ui_deadline = start + config.timeout_seconds
+    completion_timeout = float(os.environ.get("SIMPLIFY_SKILLS_TIMEOUT_SECONDS", "360"))
+    completion_deadline = start + max(1.0, completion_timeout)
+
+    def wait_for(action: Any, description: str) -> Any:
+        while time.monotonic() < ui_deadline:
+            result = action(driver)
+            if result:
+                return result
+            time.sleep(0.25)
+        raise SimplifyBrowserError(f"Simplify's {description} was not visible in time.")
+
+    try:
+        _focus_or_open_application_tab(driver, application_url)
+        while driver.execute_script("return document.readyState") != "complete":
+            if time.monotonic() >= ui_deadline:
+                raise SimplifyBrowserError("The application page did not finish loading in time.")
+            time.sleep(0.2)
+
+        wait_for(_click_simplify_skills_dropdown, "Select skills to autofill menu")
+        wait_for(_click_simplify_select_all_skills, "Select all skills option")
+        selected_count = wait_for(
+            _click_simplify_autofill_skills_button,
+            "Autofill Skills confirmation button",
+        )
+
+        missing_selector_checks = 0
+        while time.monotonic() < completion_deadline:
+            status = _simplify_skills_autofill_status(driver)
+            if bool(status.get("complete")):
+                return SimplifySkillsAutofillResult(
+                    url=driver.current_url,
+                    selected_count=selected_count,
+                    completion="complete",
+                    elapsed_seconds=time.monotonic() - start,
+                )
+
+            # Simplify versions that close the skills panel on success do not
+            # expose completion text. Require repeated observations to avoid
+            # treating a short re-render as completion.
+            if not bool(status.get("selector_visible")):
+                missing_selector_checks += 1
+                if missing_selector_checks >= 3:
+                    return SimplifySkillsAutofillResult(
+                        url=driver.current_url,
+                        selected_count=selected_count,
+                        completion="panel_closed",
+                        elapsed_seconds=time.monotonic() - start,
+                    )
+            else:
+                missing_selector_checks = 0
+            time.sleep(1)
+
+        raise SimplifyBrowserError(
+            "Simplify started autofilling all skills but did not report completion within "
+            f"{int(completion_timeout)} seconds. Inspect the Simplify panel before continuing."
         )
     except Exception:
         # This session is shared with Playwright MCP; never quit it here.

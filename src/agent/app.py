@@ -8,7 +8,24 @@ from rich.console import Console
 import asyncio
 from pypdf import PdfReader
 from pydantic import Field
-from src.agent.tools import terminal, web_search, update_file, read_file, get_jobs, update_job_status, delegate_job_application, simplify_autofill, record_pending_application_question, tools_by_name, worker_model_holder
+from src.agent.tools import (
+    terminal,
+    web_search,
+    update_file,
+    read_file,
+    get_jobs,
+    update_job_status,
+    delegate_job_application,
+    simplify_autofill,
+    simplify_autofill_all_skills,
+    select_workday_hear_about_us,
+    select_dropdown_option,
+    ask_for_profile_answer,
+    tools_by_name,
+    worker_model_holder,
+    get_job_profile_from_url,
+    insert_job_profile_to_excel,
+)
 from langchain_openrouter import ChatOpenRouter
 import os
 from mcp_client.mcp_manager import MCPManager
@@ -16,11 +33,18 @@ from mcp_client.mcp_manager import MCPManager
 mcp_manager = MCPManager("mcp_client/servers.json")
 MODEL_NAME = os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.6-luna")
 
-manager_tools = [delegate_job_application, get_jobs, update_job_status]
-# TEMPORARY AUTONOMOUS MODE: user-input tools are intentionally omitted while
-# the user is away. Re-add `ask_user` and `ask_for_missing_application_data`
-# here and in `initialize_tools()` when interactive operation is restored.
-worker_tools = [web_search, update_file, read_file, update_job_status, simplify_autofill, record_pending_application_question]
+manager_tools = [delegate_job_application, get_jobs, update_job_status, get_job_profile_from_url, insert_job_profile_to_excel]
+worker_tools = [
+    web_search,
+    update_file,
+    read_file,
+    update_job_status,
+    simplify_autofill,
+    simplify_autofill_all_skills,
+    select_workday_hear_about_us,
+    select_dropdown_option,
+    ask_for_profile_answer,
+]
 
 
 async def shutdown():
@@ -54,8 +78,17 @@ async def initialize_tools():
         errors["chrome"] = exc
     errors.update(await mcp_manager.connect())
     mcp_tools = await mcp_manager.get_langchain_tools()
-    # Keep interactive collection tools unavailable in temporary autonomous mode.
-    worker_tools = [web_search, update_file, read_file, update_job_status, simplify_autofill, record_pending_application_question] + mcp_tools
+    worker_tools = [
+        web_search,
+        update_file,
+        read_file,
+        update_job_status,
+        simplify_autofill,
+        simplify_autofill_all_skills,
+        select_workday_hear_about_us,
+        select_dropdown_option,
+        ask_for_profile_answer,
+    ] + mcp_tools
     worker_model = model.bind_tools(worker_tools)
     worker_model_holder["model"] = worker_model
 

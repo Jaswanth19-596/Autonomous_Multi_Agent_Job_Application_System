@@ -26,14 +26,7 @@ worker_model_holder = {"model": None}
 
 
 from rich.panel import Panel
-from src.cli.ui_qna import (
-    PENDING_QUESTIONS_FILE_PATH,
-    QNA_FILE_PATH,
-    build_qna_context,
-    interactive_ask_user,
-    record_pending_question,
-    update_qna_file,
-)
+from src.application.profile_answers import save_application_answer
 from src.data.user_profile import UserProfile
 
 import pandas as pd
@@ -45,35 +38,28 @@ _JOBBOARD_SKILLS_DIR = _BASE_DIR / "skills" / "jobboards"
 
 
 @tool
-def ask_user(question: str, options: list = None, multi_select: bool = False) -> str:
-    """Ask the user a question interactively with selectable options during execution.
-    The user's response is automatically saved to user_details/qna.md for future reference.
+def ask_for_profile_answer(question: str, options: list[str] | None = None) -> str:
+    """Ask the user an unknown application question and save their exact answer.
 
-    Args:
-        question: The question prompt to present to the user.
-        options: Optional list of choices for the user. Options can be strings or dicts with 'label' and 'description'.
-        multi_select: Whether the user can select multiple options.
+    This tool blocks for terminal input. Use it instead of guessing or using a
+    placeholder answer. The confirmed answer is saved to user_profile.json and
+    will be included in future application prompts.
     """
-    answer = interactive_ask_user(question=question, options=options, multi_select=multi_select)
-    update_qna_file(question=question, answer=answer)
-    return f"User selected answer: '{answer}'"
+    console.print("\n[bold yellow]Application question needs your answer[/bold yellow]")
+    console.print(f"[bold]{question.strip()}[/bold]")
+    if options:
+        console.print("[dim]Available options:[/dim]")
+        for option in options:
+            console.print(f"  - {option}")
 
+    answer = ""
+    while not answer:
+        answer = input("Your answer: ").strip()
+        if not answer:
+            console.print("[yellow]Please enter an answer.[/yellow]")
 
-@tool
-def record_pending_application_question(question: str, placeholder_answer: str) -> str:
-    """Record an unknown application question in pending_questions.json.
-
-    Use this after selecting a reasonable fallback. The user reviews this queue
-    and manually promotes confirmed answers into their profile. Do not use
-    read_file or update_file for pending_questions.json.
-    """
-    result = record_pending_question(question, placeholder_answer)
-    if result["created"]:
-        return f"Recorded pending question {result['id']} in pending_questions.json."
-    return (
-        f"Updated existing pending question {result['id']} "
-        f"(seen {result['seen_count']} times); no duplicate was added."
-    )
+    saved_answer = save_application_answer(question, answer)
+    return f"User answered and saved to user_profile.json: '{saved_answer}'"
 
 
 @tool
@@ -90,7 +76,6 @@ async def delegate_job_application(job_details: dict) -> dict:
 
     user_profile = UserProfile.build_user_profile(
     str(_BASE_DIR / "data" / "user_profile.json"))
-    qna_context = build_qna_context()
 
     # read pdf resume file
     try:
@@ -117,7 +102,7 @@ async def delegate_job_application(job_details: dict) -> dict:
     apply_url = job_details.get("link") or job_details.get("applyUrl")
 
     log_file = setup_job_logger(job_id, company, title)
-    
+
     console.print(
         Panel(
             f"[bold cyan]Job ID:[/bold cyan] {job_id}\n"
@@ -138,9 +123,6 @@ async def delegate_job_application(job_details: dict) -> dict:
         Apply URL: {apply_url}
 
         User Profile and Resume: {user_profile}
-
-        Known user Q&A (these are user-confirmed answers only):
-        {qna_context}
     """
 
     outcome = {
@@ -276,11 +258,11 @@ def update_file(file_name: str, old_string: str, new_string):
 
     try:
         protected_file = Path(file_name).expanduser().resolve()
-        is_qna_file = protected_file in {QNA_FILE_PATH.resolve(), PENDING_QUESTIONS_FILE_PATH.resolve()}
+        is_profile_file = protected_file == (_BASE_DIR / "data" / "user_profile.json").resolve()
     except OSError:
-        is_qna_file = False
-    if is_qna_file:
-        return "Do not edit Q&A or pending-question storage with update_file; use the dedicated recording tool instead."
+        is_profile_file = False
+    if is_profile_file:
+        return "Do not edit user_profile.json with update_file; use ask_for_profile_answer instead."
 
     with open(file_name, 'r') as f:
         content = f.read()
@@ -290,7 +272,7 @@ def update_file(file_name: str, old_string: str, new_string):
     with open(file_name, 'w') as f:
         f.write(new_content)
 
-    
+
     console.print(f"[bold red]{old_string}[/bold red]")
     console.print(f"[bold green]{new_string}[/bold green]")
 
@@ -303,11 +285,11 @@ def read_file(file_name : str):
 
     try:
         protected_file = Path(file_name).expanduser().resolve()
-        is_qna_file = protected_file in {QNA_FILE_PATH.resolve(), PENDING_QUESTIONS_FILE_PATH.resolve()}
+        is_profile_file = protected_file == (_BASE_DIR / "data" / "user_profile.json").resolve()
     except OSError:
-        is_qna_file = False
-    if is_qna_file:
-        return "Do not read Q&A or pending-question storage directly. The worker receives confirmed Q&A in its prompt."
+        is_profile_file = False
+    if is_profile_file:
+        return "Do not read user_profile.json directly. The worker receives its profile in the prompt."
 
     try:
         with open(file_name, 'r') as f:
@@ -360,6 +342,156 @@ async def simplify_autofill() -> str:
         "profile, but no additional controls changed. Check the Chrome window for "
         "a Simplify sign-in or review prompt."
     )
+
+
+@tool
+async def simplify_autofill_all_skills() -> str:
+    """Autofill every skill offered by Simplify's visible skills prompt.
+
+    Use this only after the Simplify panel visibly says ``Select skills to
+    autofill`` on a Workday application. The tool opens that dropdown, chooses
+    ``Select all``, clicks ``Autofill <N> Skills``, and waits up to six minutes
+    for Simplify to finish. Do not issue Playwright actions while it is running.
+    """
+    from src.agent.app import mcp_manager
+    from src.automation.simplify_selenium import (
+        SimplifyBrowserError,
+        trigger_simplify_all_skills_autofill,
+    )
+
+    try:
+        output = await mcp_manager.call_tool(
+            "playwright",
+            "browser_run_code_unsafe",
+            {"code": "async (page) => 'ACTIVE_APPLICATION_URL:' + page.url()"},
+        )
+    except Exception as exc:
+        return f"SIMPLIFY_SKILLS_FAILED: Could not read the active application URL: {exc}"
+
+    match = re.search(r"ACTIVE_APPLICATION_URL:(https?://[^\s\"']+)", str(output))
+    if not match:
+        return (
+            "SIMPLIFY_SKILLS_FAILED: The active browser did not return an application URL. "
+            f"Details: {output}"
+        )
+
+    try:
+        result = await asyncio.to_thread(
+            trigger_simplify_all_skills_autofill, match.group(1)
+        )
+    except SimplifyBrowserError as exc:
+        return f"SIMPLIFY_SKILLS_FAILED: {exc}"
+    except Exception as exc:
+        return f"SIMPLIFY_SKILLS_FAILED: Unexpected Selenium error: {exc}"
+
+    count = str(result.selected_count) if result.selected_count is not None else "all"
+    elapsed = round(result.elapsed_seconds)
+    if result.completion == "complete":
+        return (
+            f"SIMPLIFY_SKILLS_SUCCESS: Selected all {count} Simplify skill(s) and "
+            f"Simplify reported completion after {elapsed}s. Scan the Workday form "
+            "before continuing."
+        )
+    return (
+        f"SIMPLIFY_SKILLS_SUCCESS: Selected all {count} Simplify skill(s); the skills "
+        f"panel closed after {elapsed}s. Scan the Workday form and Simplify panel "
+        "before continuing."
+    )
+
+
+@tool
+async def select_workday_hear_about_us() -> str:
+    """Complete Workday's visible "How did you hear about us?" choice hierarchy.
+
+    Use only when that question is visible on a Workday form. The tool chooses
+    the first usable non-placeholder option, follows each newly revealed
+    dependent dropdown or radio group, and chooses the first final option. It
+    verifies every selection and returns the selected path; do not manually
+    open or inspect the source dropdowns before or after calling it.
+    """
+    from src.application.workday_controls import WORKDAY_HEAR_ABOUT_US_CODE
+    from src.automation.simplify_gate import parse_playwright_json
+    from src.agent.app import mcp_manager
+
+    try:
+        output = await mcp_manager.call_tool(
+            "playwright",
+            "browser_run_code_unsafe",
+            {"code": WORKDAY_HEAR_ABOUT_US_CODE},
+        )
+        result = parse_playwright_json(str(output))
+    except Exception as exc:
+        return f"WORKDAY_SOURCE_FAILED: Could not select the source hierarchy: {exc}"
+
+    steps = result.get("steps", [])
+    path = " → ".join(str(step.get("option", "")) for step in steps if step.get("option"))
+    if result.get("status") == "selected":
+        return (
+            "WORKDAY_SOURCE_SUCCESS: Selected the first available source path"
+            + (f": {path}." if path else ".")
+            + " Continue with a fresh Workday page scan."
+        )
+    detail = result.get("reason", "the source question or a dependent option was not available")
+    return (
+        "WORKDAY_SOURCE_FAILED: "
+        f"{detail}. Completed path before stopping: {path or 'none'}."
+    )
+
+
+@tool
+async def select_dropdown_option(field: str, option: str) -> str:
+    """Open one application dropdown and select one exact option.
+
+    Call this once with the control's exact id, name, aria-label, or visible
+    label and the complete option text. The tool clicks the closed dropdown,
+    waits for its options to render, and then clicks the exact requested option.
+    Do not open the dropdown or click its options with separate browser tools.
+    """
+    from src.application.dropdown_selection import build_select_dropdown_option_code
+    from src.automation.simplify_gate import parse_playwright_json
+    from src.agent.app import mcp_manager
+
+    try:
+        output = await mcp_manager.call_tool(
+            "playwright",
+            "browser_run_code_unsafe",
+            {"code": build_select_dropdown_option_code(field, option)},
+        )
+        result = parse_playwright_json(str(output))
+    except Exception as exc:
+        return f"DROPDOWN_SELECTION_FAILED: Could not inspect '{field}': {exc}"
+
+    if result.get("status") == "selected":
+        return (
+            "DROPDOWN_SELECTION_SUCCESS: Selected exact option "
+            f"'{result.get('selected_option')}' for '{result.get('field') or field}'."
+        )
+
+    failure = result.get("failure_code", "selection_failed")
+    available = result.get("available_options") or []
+    if failure == "option_not_found":
+        choices = "; ".join(f"'{choice}'" for choice in available) or "(none were exposed)"
+        return (
+            "DROPDOWN_OPTION_NOT_FOUND: Requested exact option "
+            f"'{option}' is not available for '{result.get('field') or field}'. "
+            f"Available options: {choices}. Choose one of these exact values; do not shorten or approximate it."
+        )
+    if failure == "control_not_found":
+        return (
+            f"DROPDOWN_CONTROL_NOT_FOUND: No visible dropdown exactly matched '{field}'. "
+            "Re-scan the page and use its exact id, name, aria-label, or visible label."
+        )
+    if failure == "options_unavailable":
+        return (
+            f"DROPDOWN_OPTIONS_UNAVAILABLE: '{result.get('field') or field}' opened without readable options. "
+            "Take one fresh page snapshot to recover the field's exact identity, then retry this tool; "
+            "do not click the field or option with separate browser tools."
+        )
+    return (
+        f"DROPDOWN_SELECTION_FAILED: '{result.get('field') or field}' did not accept '{option}' "
+        f"({failure}). {('Observed value: ' + str(result.get('selected_option')) + '.') if result.get('selected_option') else ''}"
+    )
+
 
 @tool
 def get_jobs(filters: list[str] = None, n: int = None) -> list[dict]:
@@ -431,6 +563,60 @@ def get_jobs(filters: list[str] = None, n: int = None) -> list[dict]:
 import threading
 
 excel_lock = threading.Lock()
+
+
+
+@tool
+def get_job_profile_from_url(link: str) -> dict:
+    """Fetch a user-supplied job URL into an insert-ready job dictionary.
+
+    The result includes id, title, companyName, link, applyUrl, description,
+    and a Not Applied status. Pass the entire returned dictionary unchanged to
+    insert_job_profile_to_excel before retrieving pending jobs.
+    """
+    try:
+        from src.jobs.profile import fetch_job_profile
+
+        return fetch_job_profile(link)
+    except Exception as exc:
+        return {"error": f"Failed to fetch job profile: {exc}"}
+
+
+@tool
+def insert_job_profile_to_excel(job_profile: dict) -> str:
+    """Insert or refresh a job profile returned by get_job_profile_from_url.
+
+    Pass the exact dictionary returned by get_job_profile_from_url. Existing
+    rows are matched by URL before ID, and their application status is kept.
+    New rows are created with application_status set to Not Applied.
+    """
+
+    with excel_lock:
+        if not _EXCEL_PATH.exists():
+            return f"No jobs file found at {_EXCEL_PATH}."
+
+        if not isinstance(job_profile, dict) or job_profile.get("error"):
+            detail = job_profile.get("error") if isinstance(job_profile, dict) else "profile was not a dictionary"
+            return f"Cannot insert job profile: {detail}"
+
+        try:
+            from src.data.jobs_workbook import upsert_job_row
+
+            action, _ = upsert_job_row(
+                _EXCEL_PATH,
+                job_profile,
+                preserve_existing={"application_status"},
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
+        except Exception as exc:
+            return f"Failed to save changes to {_EXCEL_PATH}: {exc}"
+
+        return (
+            f"Successfully {action} job '{job_profile['id']}' "
+            f"({job_profile.get('title', 'Unknown position')} at "
+            f"{job_profile.get('companyName', 'Unknown company')}) in {_EXCEL_PATH}."
+        )
 
 
 @tool

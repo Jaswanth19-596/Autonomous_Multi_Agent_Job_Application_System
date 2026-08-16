@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import dedent
 
@@ -40,6 +40,7 @@ class UserProfile:
     preferred_locations: str
 
     restricted_by_current_or_former_employer: bool
+    application_answers: dict[str, dict[str, str]] = field(default_factory=dict)
 
     @classmethod
     def build_user_profile(cls, file_path: str) -> str:
@@ -50,6 +51,12 @@ class UserProfile:
 
         def yes_no(value: bool) -> str:
             return "Yes" if value else "No"
+
+        application_answers = "\n".join(
+            f"- {item['question']}: {item['answer']}"
+            for item in profile.application_answers.values()
+            if item.get("question") and item.get("answer")
+        ) or "- None recorded yet."
 
         return dedent(f"""
             CANDIDATE PROFILE — Use these details exactly. Do not invent information.
@@ -85,4 +92,7 @@ class UserProfile:
             Compliance:
             - Restricted by a current/former-employer agreement:
               {yes_no(profile.restricted_by_current_or_former_employer)}
+
+            Confirmed application answers:
+            {application_answers}
         """).strip()

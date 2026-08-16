@@ -61,6 +61,69 @@ def update_job_row(path: Path, job_id: str, updates: dict[str, Any]) -> None:
     workbook.save(path)
 
 
+def upsert_job_row(
+    path: Path,
+    record: dict[str, Any],
+    *,
+    preserve_existing: set[str] | None = None,
+) -> tuple[str, int]:
+    """Add a job record or refresh its details without replacing the workbook.
+
+    URL fields are checked before the identifier. This allows a URL supplied by
+    a user to refresh a pre-existing row even when the job board changed the
+    identifier exposed in its page markup.
+    """
+    if not str(record.get("id", "")).strip():
+        raise ValueError("A job record needs a non-empty 'id'.")
+
+    workbook = load_workbook(path)
+    sheet = _applications_sheet(workbook)
+    headers = _headers(sheet)
+    for header in record:
+        if header not in headers:
+            column = sheet.max_column + 1
+            sheet.cell(1, column, header)
+            headers[header] = column
+
+    target_row = None
+    for match_header in ("link", "applyUrl", "id"):
+        value = str(record.get(match_header, "")).strip()
+        column = headers.get(match_header)
+        if not value or column is None:
+            continue
+        target_row = next(
+            (
+                row
+                for row in range(2, sheet.max_row + 1)
+                if str(sheet.cell(row, column).value or "").strip() == value
+            ),
+            None,
+        )
+        if target_row is not None:
+            break
+
+    action = "updated" if target_row is not None else "inserted"
+    if target_row is None:
+        target_row = sheet.max_row + 1
+        style_source_row = max(2, target_row - 1)
+        for column in range(1, sheet.max_column + 1):
+            source = sheet.cell(style_source_row, column)
+            target = sheet.cell(target_row, column)
+            if source.has_style:
+                target._style = copy(source._style)
+            target.number_format = source.number_format
+
+    protected_headers = preserve_existing or set()
+    for header, value in record.items():
+        if action == "updated" and header in protected_headers:
+            continue
+        sheet.cell(target_row, headers[header], value)
+
+    _extend_tables(sheet)
+    workbook.save(path)
+    return action, target_row
+
+
 def append_job_rows(path: Path, rows: list[dict[str, Any]]) -> int:
     """Append jobs not already present, preserving dashboard and table styling."""
     if not rows:

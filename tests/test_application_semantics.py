@@ -5,6 +5,7 @@ from src.application.semantics import (
     build_advance_code, build_fill_dropdowns_code, build_fill_page_code,
     build_fill_radio_groups_code, build_upload_code, resolve_answers,
 )
+from src.application.workday_controls import WORKDAY_HEAR_ABOUT_US_CODE
 
 
 def test_page_schema_is_compact_and_covers_application_controls():
@@ -94,6 +95,42 @@ def test_workday_combobox_requires_committed_option():
     assert "option_not_committed" in code
     assert "aria-invalid" in code
     assert "exact:true" in code
+
+
+def test_workday_source_resolver_follows_only_the_source_hierarchy():
+    code = WORKDAY_HEAR_ABOUT_US_CODE
+
+    assert "myworkdayjobs|workday" in code
+    assert "how|where" in code and "hear" in code
+    assert "data-agent-hear-about-root" in code
+    assert "choiceCount <= 8" in code
+    assert "hops < 4" in code
+    assert "depth < 8" in code
+    assert "newlyVisible.length === 1" in code
+
+
+def test_workday_source_resolver_selects_first_real_dropdown_or_radio_option():
+    code = WORKDAY_HEAR_ABOUT_US_CODE
+
+    assert "placeholderPattern.test(data.text)" in code
+    assert 'button[name], button[id]' in code
+    assert "source_identity" in code
+    assert "source--source" in code
+    assert 'formField-source' in code
+    assert 'promptSearchButton' in code
+    assert "sourceInput.press('ArrowDown')" in code
+    assert "sourceInput.press('Enter')" in code
+    assert 'hierarchical_multiselect_radio_leaf' in code
+    assert 'input[type="radio"]:visible' in code
+    assert 'input[type="text"]' in code
+    assert "await control.selectOption" in code
+    assert "[role=\"option\"]" in code
+    assert '[role="listbox"]:visible li' in code
+    assert "Workday dropdown selection did not persist" in code
+    assert "await page.keyboard.press('ArrowDown')" in code
+    assert "await option.check" in code
+    assert "radio selection did not persist" in code
+    assert "data-simplify-overlay" in code
 
 
 def test_dropdown_verifies_visible_selected_state_not_only_input_value():

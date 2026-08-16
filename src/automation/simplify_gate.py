@@ -234,13 +234,25 @@ async (page) => {
     };
   }
 
+  const actionScore = (text) => {
+    if (/autofill\s+this\s+page/i.test(text)) return 90;
+    if (/autofill\s+my\s+application/i.test(text)) return 80;
+    if (/auto(?:fill+|flll)\s+this\s+form/i.test(text)) return 70;
+    if (/run\s+autofill\s+again/i.test(text)) return 60;
+    if (/(?:^|\s)autofill(?:\s|$)/i.test(text)) return 50;
+    if (/continue\s+application/i.test(text)) return 40;
+    if (/create\s+account/i.test(text)) return 30;
+    if (/sign\s+in/i.test(text)) return 20;
+    return 0;
+  };
   const findAutofill = () => {
     const candidates = [];
     for (const root of roots) {
       for (const element of root.querySelectorAll('button, [role="button"], a')) {
         const text = label(element);
-        if (visible(element) && /autofill\s+this\s+page|run\s+autofill\s+again/i.test(text)) {
-          candidates.push({ element, text });
+        const score = actionScore(text);
+        if (visible(element) && score) {
+          candidates.push({ element, text, score });
         }
       }
     }
@@ -272,13 +284,7 @@ async (page) => {
     };
   }
 
-  candidates.sort((a, b) => {
-    const aExact = /autofill\s+this\s+page/i.test(a.text) ? 2
-      : /run\s+autofill\s+again/i.test(a.text) ? 1 : 0;
-    const bExact = /autofill\s+this\s+page/i.test(b.text) ? 2
-      : /run\s+autofill\s+again/i.test(b.text) ? 1 : 0;
-    return bExact - aExact;
-  });
+  candidates.sort((a, b) => b.score - a.score);
   const selected = candidates[0];
   const fieldState = () => Array.from(document.querySelectorAll('input, textarea, select'))
     .filter(el => el.type !== 'hidden')
@@ -374,4 +380,3 @@ def is_gate_exempt_click(args: dict) -> bool:
         "close cookie",
     )
     return any(phrase in label for phrase in exempt_phrases)
-

@@ -109,10 +109,15 @@ def test_simplify_and_gate_use_identical_url_fingerprinting():
     assert fingerprint in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
 
 
-def test_simplify_tool_prioritizes_exact_side_panel_action():
+def test_simplify_tool_prioritizes_known_side_panel_actions():
     assert "autofill\\s+this\\s+page" in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
+    assert "autofill\\s+my\\s+application" in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
+    assert "auto(?:fill+|flll)\\s+this\\s+form" in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
     assert "run\\s+autofill\\s+again" in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
-    assert "bExact - aExact" in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
+    assert "continue\\s+application" in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
+    assert "create\\s+account" in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
+    assert "sign\\s+in" in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
+    assert "b.score - a.score" in SIMPLIFY_SIDE_PANEL_AUTOFILL_CODE
 
 
 def test_changed_fields_authorize_repairs():
