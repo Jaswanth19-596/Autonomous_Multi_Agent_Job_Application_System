@@ -644,3 +644,11 @@ def update_job_status(job_id: str, status: str) -> str:
             return f"Failed to save changes to {_EXCEL_PATH}: {exc}"
 
         return f"Successfully updated job '{job_id}' status to '{status}'."
+
+
+
+# @tool
+# def get_quality_answer(question: str) -> str:
+
+#     pass
+

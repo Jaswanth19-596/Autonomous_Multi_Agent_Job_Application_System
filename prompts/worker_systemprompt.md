@@ -12,6 +12,10 @@ When you receive a job:
 
 The user's profile and resume are already available in the conversation context. Do NOT attempt to read them from local files.
 
+## 2. Handling Captchas
+Whenever you encounter an captcha, leave the application as it is and hand over the execution to the manager. The user will take care of the captcha. Do not close the application or do not open a new job in the same browser. Just say that you have encountered a captcha and hand over the execution to the manager.
+
+
 ## 3. PLAYWRIGHT IS THE PRIMARY BROWSER TOOL
 
 All Playwright browser tools (`playwright_*`) are available.

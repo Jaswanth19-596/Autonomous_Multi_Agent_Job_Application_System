@@ -6,6 +6,7 @@
 - Review the parsed Work Experience carefully: autofill may add historical roles not present in the supplied resume; retain only profile-supported entries when possible.
 
 # 1. Use Simplify as much as possible
+
 Workday applications are very complex. Use simplify autofill as much as possible. It will fill most of the fields of the application, only for fields which are not filled, you can fill them manually. Make sure to use the simplify tool on every new page. This is very important. 
 
 If Simplify's panel shows **"Select skills to autofill"**, call
@@ -38,3 +39,5 @@ Additional reusable learnings:
 - On Huron applications, resume upload may complete through the custom upload widget even when the generic file-upload tool does not detect a modal; verify the uploaded filename in the DOM before proceeding.
 - Huron's Self Identify step may prefill the current date and disability choice; inspect checkbox state and only complete missing required fields before advancing.
 - Some Workday forms render later-step required fields in the same DOM and block Save and Continue from My Information until those fields are completed. Education school controls may be multiselect-backed and return “No Items” even for a valid profile institution; do not replace the school with an invented value—report the blocking validation if no supported option is available.
+- Vanguard's Workday My Information page may render “How Did You Hear About Us?” as a multiselect with a Search textbox. The automated source helper can report success while leaving the field invalid/at 0 items selected; inspect the field after helper completion, and if it remains invalid, treat the form as blocked rather than repeatedly reopening it.
+- Some Workday education school multiselects return only “No Items” even when the candidate's supported university is valid. Try each supported campus once; if both return no items, treat the application as blocked rather than entering an invented school.

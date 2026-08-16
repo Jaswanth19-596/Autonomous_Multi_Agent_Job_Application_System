@@ -62,6 +62,14 @@ model = ChatOpenRouter(
     # },
 )
 
+quality_model = ChatOpenRouter(
+    model="",
+    api_key=os.environ["OPENROUTER_API_KEY"],
+)
+
+
+
+
 manager_model = model.bind_tools(manager_tools)
 worker_model = model.bind_tools(worker_tools)
 

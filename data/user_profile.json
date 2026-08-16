@@ -123,6 +123,46 @@
       "question": "Which cloud platforms have you deployed production AI workloads on? The application requires at least two selections. Choose from AWS, Microsoft Azure, Oracle OCI, or None of the above.",
       "answer": "AWS, Azure",
       "updated_at": "2026-08-16T01:29:52.790839+00:00"
+    },
+    "what is your preferred pronoun for the parts town application?": {
+      "question": "What is your preferred pronoun for the Parts Town application?",
+      "answer": "He/Him/His",
+      "updated_at": "2026-08-16T03:01:43.003935+00:00"
+    },
+    "have you completed the following level of education: bachelor's degree?": {
+      "question": "Have you completed the following level of education: Bachelor's Degree?",
+      "answer": "Yes",
+      "updated_at": "2026-08-16T12:11:47.933705+00:00"
+    },
+    "have you previously been employed by proofpoint?": {
+      "question": "Have you previously been employed by Proofpoint?",
+      "answer": "No",
+      "updated_at": "2026-08-16T12:18:56.879769+00:00"
+    },
+    "itron requires checking this consent box to create an account: “i agree to allow itron's recruiting department to contact me periodically about potentially relevant career opportunities (you can unsubscribe at any time).” do you agree?": {
+      "question": "Itron requires checking this consent box to create an account: “I agree to allow Itron's recruiting department to contact me periodically about potentially relevant career opportunities (you can unsubscribe at any time).” Do you agree?",
+      "answer": "Yes, I agree",
+      "updated_at": "2026-08-16T12:30:13.847217+00:00"
+    },
+    "deloitte asks: do you have or plan to pursue a cpa license? (required). which option should i select?": {
+      "question": "Deloitte asks: Do you have or plan to pursue a CPA license? (Required). Which option should I select?",
+      "answer": "I do not have a plan to pursue a CPA license",
+      "updated_at": "2026-08-16T12:45:32.963070+00:00"
+    },
+    "linkedin easy apply asks required years of work experience for: (1) python (programming language), (2) rest apis, (3) git, and (4) information technology. what exact number of years should i enter for each?": {
+      "question": "LinkedIn Easy Apply asks required years of work experience for: (1) Python (Programming Language), (2) REST APIs, (3) Git, and (4) Information Technology. What exact number of years should I enter for each?",
+      "answer": "Look at my profile and answer these questions",
+      "updated_at": "2026-08-16T12:55:09.532196+00:00"
+    },
+    "linkedin easy apply asks: how many years of work experience do you have with enterprise software?": {
+      "question": "LinkedIn Easy Apply asks: How many years of work experience do you have with Enterprise Software?",
+      "answer": "2",
+      "updated_at": "2026-08-16T13:25:17.587706+00:00"
+    },
+    "have you worked at exelixis before?": {
+      "question": "Have you worked at Exelixis before?",
+      "answer": "No",
+      "updated_at": "2026-08-16T13:39:56.799816+00:00"
     }
   }
 }
