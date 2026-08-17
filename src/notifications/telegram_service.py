@@ -154,13 +154,41 @@ class TelegramService:
                 resolved = False
             await self._send_direct("Answer recorded." if resolved else "That question is no longer active.")
             return
+        if action == "captcha":
+            try:
+                from src.application.captcha_queue import requeue_after_captcha
+
+                requeued = await asyncio.to_thread(requeue_after_captcha, remainder)
+            except Exception as exc:
+                logger.warning("Could not requeue CAPTCHA application %s: %s", remainder, exc)
+                requeued = False
+            if requeued:
+                # If the normal queue drained while the user was solving the
+                # CAPTCHA, wake the manager so this tail item is not stranded
+                # waiting for an unrelated manual message.
+                await self.runtime.inputs.submit_message(
+                    "Continue processing the job queue; a CAPTCHA-held application was requeued."
+                )
+            await self._send_direct(
+                "✅ CAPTCHA recorded. The application has been moved to the end of the queue."
+                if requeued
+                else "That CAPTCHA application is no longer waiting."
+            )
+            return
         if action == "command":
             await self._handle_message("/" + remainder)
 
     async def _handle_message(self, text: str) -> None:
         command = text.split(maxsplit=1)[0].lower()
+        if command == "/start":
+            if self.runtime.controller.snapshot().status == "running":
+                await self._send_direct("🤖 Agent is already running. Send your message when ready.")
+            else:
+                await self.runtime.controller.start()
+                await self._send_direct("🤖 Agent started. Send your message when ready.")
+            return
         if command == "/status":
-            await self._send_direct(self._status_text(), keyboard=[[{"text": "⏸ Pause", "callback_data": "command:pause"}, {"text": "🛑 Stop", "callback_data": "command:stop"}]])
+            await self._send_direct(self._status_text(), keyboard=self._status_keyboard())
             return
         if command == "/pause":
             changed = await self.runtime.controller.pause()
@@ -172,12 +200,24 @@ class TelegramService:
             return
         if command == "/stop":
             changed = await self.runtime.controller.stop()
-            await self._send_direct("🛑 Agent will stop after its current safe operation." if changed else "Agent is not currently running.")
+            await self._send_direct(
+                "🛑 Agent stopped. Any in-flight operation will halt at its next safe boundary."
+                if changed
+                else "Agent is already stopped."
+            )
             return
         if command == "/help":
-            await self._send_direct("Commands:\n/status\n/pause\n/resume\n/stop\n/help\n\nOther messages are queued for the existing manager agent.")
+            await self._send_direct("Commands:\n/start\n/status\n/pause\n/resume\n/stop\n/help\n\nOther messages are queued for the existing manager agent.")
             return
         await self.runtime.inputs.submit_message(text)
+
+    def _status_keyboard(self) -> list[list[dict[str, str]]]:
+        status = self.runtime.controller.snapshot().status
+        if status in {"stopping", "stopped", "completed", "idle"}:
+            return [[{"text": "▶️ Start", "callback_data": "command:start"}]]
+        if status == "paused":
+            return [[{"text": "▶️ Resume", "callback_data": "command:resume"}, {"text": "🛑 Stop", "callback_data": "command:stop"}]]
+        return [[{"text": "⏸ Pause", "callback_data": "command:pause"}, {"text": "🛑 Stop", "callback_data": "command:stop"}]]
 
     def _status_text(self) -> str:
         snapshot = self.runtime.controller.snapshot()

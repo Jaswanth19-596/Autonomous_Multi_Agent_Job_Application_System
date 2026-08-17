@@ -34,6 +34,10 @@ class AgentRuntimeController:
     async def start(self, task: str | None = None) -> None:
         self._status = "running"
         self._current_task = task
+        self._current_operation = None
+        self._current_tool = None
+        self._progress_current = None
+        self._progress_total = None
         self._started_at = datetime.now(timezone.utc)
         self._resume_event.set()
 
@@ -58,20 +62,25 @@ class AgentRuntimeController:
         return True
 
     async def stop(self) -> bool:
-        if self._status not in {"running", "paused", "stopping"}:
+        if self._status not in {"running", "paused"}:
             return False
-        self._status = "stopping"
+        self._status = "stopped"
+        self._current_task = None
+        self._current_operation = None
+        self._current_tool = None
+        self._progress_current = None
+        self._progress_total = None
         self._resume_event.set()
         return True
 
     async def wait_if_paused(self) -> bool:
         """Wait without polling. False means no further operation should start."""
         await self._resume_event.wait()
-        return self._status != "stopping"
+        return self._status not in {"stopping", "stopped"}
 
     @property
     def stopping(self) -> bool:
-        return self._status == "stopping"
+        return self._status in {"stopping", "stopped"}
 
     async def set_task(self, task: str | None, operation: str | None = None) -> None:
         self._current_task = task

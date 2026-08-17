@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 from src.data.jobs_workbook import update_job_row
 
 
-JOBS_FILE = Path("data/jobs.xlsx")
+JOBS_FILE = Path(__file__).resolve().parents[2] / "data" / "jobs.xlsx"
 OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 _WRITE_LOCK = threading.Lock()
 

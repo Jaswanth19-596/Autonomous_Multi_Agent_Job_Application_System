@@ -22,6 +22,40 @@ def _headers(sheet) -> dict[str, int]:
     }
 
 
+def get_job_row(path: Path, job_id: str) -> dict[str, str] | None:
+    """Return one Applications row by ID without loading the entire sheet.
+
+    The workbook is opened in read-only mode and rows are streamed until the
+    requested ID is found.  This is intentionally separate from the pandas
+    queue reader, which materializes every job before filtering and sorting.
+    """
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = _applications_sheet(workbook)
+        header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        headers = {
+            str(value).strip(): index
+            for index, value in enumerate(header_row)
+            if value not in (None, "")
+        }
+        id_index = headers.get("id")
+        if id_index is None:
+            raise ValueError(f"'id' column missing in {path}")
+
+        target_id = str(job_id).strip()
+        for row in sheet.iter_rows(min_row=2, values_only=True):
+            value = row[id_index] if id_index < len(row) else None
+            if str(value or "").strip() != target_id:
+                continue
+            return {
+                header: "" if index >= len(row) or row[index] is None else str(row[index])
+                for header, index in headers.items()
+            }
+        return None
+    finally:
+        workbook.close()
+
+
 def _extend_tables(sheet) -> None:
     if not sheet.tables:
         return

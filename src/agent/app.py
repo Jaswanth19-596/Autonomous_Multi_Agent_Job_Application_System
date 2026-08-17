@@ -1,7 +1,13 @@
 from langgraph.graph import StateGraph, START, END, MessagesState
 from typing import TypedDict, Any
 # pyrefly: ignore [missing-import]
-from src.agent.nodes import execution_node, tool_node, human_approval_node, user_input_node
+from src.agent.nodes import (
+    execution_node,
+    tool_node,
+    human_approval_node,
+    user_input_node,
+    user_input_condition,
+)
 from langchain_core.messages import SystemMessage, HumanMessage
 from src.cli.ui import show_welcome
 from rich.console import Console
@@ -32,6 +38,7 @@ from mcp_client.mcp_manager import MCPManager
 from src.notifications.telegram_service import TelegramConfig, TelegramService
 from src.notifications.console_notifier import RichConsoleNotifier
 from src.runtime.services import AgentRuntime, configure_runtime
+from src.runtime.control_socket import LocalControlSocket
 
 mcp_manager = MCPManager("mcp_client/servers.json")
 MODEL_NAME = os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.6-luna")
@@ -117,6 +124,8 @@ class ManagerState(MessagesState, total = False):
     subagents: list = Field(description="List of subagents")
     tool_calls: list[dict] = None
     model: Any = None
+    plan_mode: bool = False
+    skip_execution: bool = False
 
 class WorkerState(MessagesState, total = False):
     approved: bool = False
@@ -145,7 +154,11 @@ def build_manager_graph():
     graph.add_node(human_approval_node) 
 
     graph.add_edge(START, "user_input_node")
-    graph.add_edge("user_input_node", "execution_node")
+    graph.add_conditional_edges(
+        "user_input_node",
+        user_input_condition,
+        {"user_input_node": "user_input_node", "execution_node": "execution_node"},
+    )
     graph.add_conditional_edges(
         "execution_node",
         execution_condition,
@@ -206,11 +219,13 @@ async def main():
     runtime = AgentRuntime()
     configure_runtime(runtime)
     runtime.events.subscribe(RichConsoleNotifier(console))
+    control_socket = LocalControlSocket(runtime)
     telegram_config = TelegramConfig.from_env()
     telegram = TelegramService(telegram_config, runtime) if telegram_config else None
 
     show_welcome()
 
+    await control_socket.start()
     if telegram:
         await telegram.start()
     await runtime.controller.start()
@@ -239,6 +254,7 @@ async def main():
         await runtime.events.emit("agent.completed", {})
         if telegram:
             await telegram.stop()
+        await control_socket.stop()
         await shutdown()
 
 

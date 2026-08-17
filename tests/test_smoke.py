@@ -53,3 +53,42 @@ def test_update_job_status(tmp_path, monkeypatch):
 
     assert row_101["application_status"] == "Applied"
     assert row_102["application_status"] == "Not Applied"
+
+
+def test_get_jobs_by_id_streams_one_row_without_pandas_queue_read(tmp_path, monkeypatch):
+    """Known job IDs should not build the complete jobs queue first."""
+    import pandas as pd
+    from src.agent.tools import get_jobs
+
+    test_excel = tmp_path / "jobs.xlsx"
+    pd.DataFrame([
+        {"id": "101", "title": "Dev", "application_status": "Not Applied"},
+        {"id": "102", "title": "QA", "application_status": "Applied"},
+    ]).to_excel(test_excel, index=False)
+
+    monkeypatch.setattr("src.agent.tools._EXCEL_PATH", test_excel)
+
+    def unexpected_queue_read(*args, **kwargs):
+        raise AssertionError("ID lookup should not call pandas.read_excel")
+
+    monkeypatch.setattr("src.agent.tools.pd.read_excel", unexpected_queue_read)
+
+    result = get_jobs.invoke({"job_id": "102"})
+
+    assert result == {"id": "102", "title": "QA", "application_status": "Applied"}
+
+
+def test_get_jobs_treats_an_empty_optional_id_as_a_queue_request(tmp_path, monkeypatch):
+    import pandas as pd
+    from src.agent.tools import get_jobs
+
+    test_excel = tmp_path / "jobs.xlsx"
+    pd.DataFrame([
+        {"id": "101", "title": "Dev", "application_status": "Not Applied"},
+        {"id": "102", "title": "QA", "application_status": "Applied"},
+    ]).to_excel(test_excel, index=False)
+    monkeypatch.setattr("src.agent.tools._EXCEL_PATH", test_excel)
+
+    result = get_jobs.invoke({"filters": ["Not Applied"], "n": 1, "job_id": ""})
+
+    assert result == [{"id": "101", "title": "Dev", "application_status": "Not Applied"}]

@@ -69,3 +69,42 @@ def test_interactive_answer_tool_saves_the_terminal_response(monkeypatch):
         "answer": "I do not want to answer",
     }
     assert "saved to user_profile.json" in result
+
+
+def test_detached_profile_answer_waits_for_the_remote_selection(monkeypatch):
+    import asyncio
+
+    from src.agent import tools as agent_tools
+    from src.runtime import services
+    from src.runtime.services import AgentRuntime
+
+    class DetachedInput:
+        @staticmethod
+        def isatty():
+            return False
+
+    saved = {}
+    runtime = AgentRuntime()
+    monkeypatch.setattr(services, "_runtime", runtime)
+    monkeypatch.setattr(agent_tools.sys, "stdin", DetachedInput())
+    monkeypatch.setattr(agent_tools, "_show_profile_question", lambda *_: None)
+    monkeypatch.setattr(
+        agent_tools,
+        "save_application_answer",
+        lambda question, answer: saved.update(question=question, answer=answer) or answer,
+    )
+
+    async def scenario():
+        waiting = asyncio.create_task(
+            agent_tools._ask_for_profile_answer_async("Can you travel?", ["Yes", "No"])
+        )
+        await asyncio.sleep(0)
+        question_id = runtime.inputs._question_id
+        assert question_id is not None
+        assert runtime.inputs.resolve_question_option(question_id, 1)
+        return await waiting
+
+    result = asyncio.run(scenario())
+
+    assert saved == {"question": "Can you travel?", "answer": "No"}
+    assert "'No'" in result

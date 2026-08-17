@@ -15,6 +15,8 @@ _ALLOWED = {
     "job_id", "ats", "url", "step", "step_name", "account_verified",
     "resume_uploaded", "completed_fields", "pending_fields", "failure_code",
     "failure_detail", "last_completed_step", "retryable", "last_attempted_at",
+    "captcha_status", "captcha_detected_at", "captcha_completed_at",
+    "captcha_url", "queue_ready_at",
 }
 _SENSITIVE_FRAGMENTS = ("password", "cookie", "token", "secret", "authorization", "otp", "demographic")
 

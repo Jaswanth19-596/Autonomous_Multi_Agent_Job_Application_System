@@ -2,7 +2,9 @@ import os
 import asyncio
 import json
 import re
+import sys
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -36,6 +38,23 @@ from pathlib import Path
 _BASE_DIR = Path(__file__).resolve().parents[2]
 _EXCEL_PATH = _BASE_DIR / "data" / "jobs.xlsx"
 _JOBBOARD_SKILLS_DIR = _BASE_DIR / "skills" / "jobboards"
+
+_HEAVY_JOB_COLUMNS = {
+    "descriptionHtml", "descriptionText", "companyDescription",
+    "companyAddress", "companyLogo", "inputUrl", "companySlogan",
+    "companyLinkedinUrl", "trackingId", "refId", "jobPosterName",
+    "jobPosterTitle", "jobPosterPhoto", "jobPosterProfileUrl",
+    "companyEmployeesCount", "benefits",
+}
+
+
+def _worker_application_status(message: str) -> str:
+    """Extract the worker's required final status without guessing from prose."""
+    match = re.search(
+        r"(?im)^\s*status\s*:\s*(applied|failed|needs_captcha)\b",
+        message or "",
+    )
+    return match.group(1).lower() if match else "completed"
 
 
 def _show_profile_question(question: str, options: list[str] | None) -> None:
@@ -71,22 +90,34 @@ async def _ask_for_profile_answer_async(question: str, options: list[str] | None
         "agent.question",
         {"question_id": pending.id, "question": question, "options": list(pending.options)},
     )
-    terminal_input = asyncio.ensure_future(PromptSession().prompt_async("Your answer: "))
     remote_answer = asyncio.create_task(runtime.inputs.wait_for_question(pending.id))
-    done, waiting = await asyncio.wait(
-        {terminal_input, remote_answer}, return_when=asyncio.FIRST_COMPLETED
-    )
-    if terminal_input in done:
-        terminal_answer = terminal_input.result().strip()
-        if terminal_answer:
-            await runtime.inputs.submit_message(terminal_answer)
-    for task in waiting:
-        task.cancel()
-    await asyncio.gather(*waiting, return_exceptions=True)
-    if remote_answer.done() and not remote_answer.cancelled():
-        answer = remote_answer.result() or ""
-    else:
-        answer = terminal_answer if terminal_input in done else ""
+    terminal_input = None
+    try:
+        if not sys.stdin.isatty():
+            # launchd has no readable terminal. The Telegram option buttons
+            # resolve remote_answer; PromptSession would raise EOFError here.
+            answer = await remote_answer or ""
+        else:
+            terminal_input = asyncio.ensure_future(PromptSession().prompt_async("Your answer: "))
+            done, _ = await asyncio.wait(
+                {terminal_input, remote_answer}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if remote_answer in done:
+                answer = remote_answer.result() or ""
+            else:
+                try:
+                    terminal_answer = terminal_input.result().strip()
+                except EOFError:
+                    terminal_answer = ""
+                if terminal_answer:
+                    await runtime.inputs.submit_message(terminal_answer)
+                # An unavailable terminal must not cancel the Telegram
+                # question. Wait for the remote answer instead.
+                answer = await remote_answer or ""
+    finally:
+        if terminal_input is not None and not terminal_input.done():
+            terminal_input.cancel()
+            await asyncio.gather(terminal_input, return_exceptions=True)
     if not answer:
         return "The user did not provide an answer. Ask again or continue without guessing."
 
@@ -164,16 +195,6 @@ async def delegate_job_application(job_details: dict) -> dict:
         )
     )
 
-    prompt = f"""
-        Apply for the Job:
-        Job ID: {job_id}
-        Job Title: {title}
-        Company: {company}
-        Apply URL: {apply_url}
-
-        User Profile and Resume: {user_profile}
-    """
-
     outcome = {
         "status": "failed",
         "failure_code": "worker_exception",
@@ -185,6 +206,7 @@ async def delegate_job_application(job_details: dict) -> dict:
     checkpoint_store = None
     metric_url = apply_url
     metrics_started = False
+    metrics = None
     try:
         reset_auto_simplify_attempts()
         from src.application.metrics import (
@@ -204,7 +226,53 @@ async def delegate_job_application(job_details: dict) -> dict:
         from src.application.checkpoint import ApplicationCheckpointStore
         checkpoint_store = ApplicationCheckpointStore()
         previous = checkpoint_store.load(str(job_id)) or {}
+        resuming_captcha = previous.get("captcha_status") == "pending"
+        protected_captcha_tab = False
         outcome["last_completed_step"] = previous.get("last_completed_step") or previous.get("step_name")
+
+        if not resuming_captcha:
+            # Keep a user-facing CAPTCHA alive in its original tab.  The next
+            # worker is given a fresh active tab rather than navigating away.
+            from src.application.captcha_queue import has_captcha_held_job
+            if has_captcha_held_job(workbook_path=_EXCEL_PATH):
+                protected_captcha_tab = True
+                try:
+                    from src.agent.app import mcp_manager
+                    await mcp_manager.call_tool("playwright", "browser_tabs", {"action": "new"})
+                except Exception as exc:
+                    # The worker also receives the invariant below.  A tab
+                    # helper failure must not turn an otherwise runnable job
+                    # into a failed application.
+                    log_event("CAPTCHA_TAB_PRESERVE_ERROR", {"failure_detail": str(exc)})
+
+        resume_instruction = ""
+        if resuming_captcha:
+            resume_instruction = f"""
+        This application was paused for a CAPTCHA. Its existing browser tab
+        must be reused: list the browser tabs, select the tab for this
+        application, and inspect it before navigating anywhere. Verify the
+        CAPTCHA is gone before continuing. If it is still visible, return the
+        exact needs_captcha status again.
+        Saved application URL: {previous.get('captcha_url') or previous.get('url') or apply_url}
+        Last completed step: {outcome['last_completed_step'] or 'unknown'}
+        """
+        elif protected_captcha_tab:
+            resume_instruction = """
+        Another application is paused for a user CAPTCHA in an existing tab.
+        Do not navigate, close, or reuse that tab. Work only in the newly
+        opened active tab for this job.
+        """
+
+        prompt = f"""
+        Apply for the Job:
+        Job ID: {job_id}
+        Job Title: {title}
+        Company: {company}
+        Apply URL: {apply_url}
+        {resume_instruction}
+
+        User Profile and Resume: {user_profile}
+        """
         worker_graph = build_worker_graph()
         result = await worker_graph.ainvoke(
             {
@@ -214,32 +282,60 @@ async def delegate_job_application(job_details: dict) -> dict:
                 ],
                 "model": worker_model
             },
-            config={"recursion_limit": 250}
+            config={"recursion_limit": 350}
         )
 
         last_message = result["messages"][-1].content if "messages" in result and result["messages"] else str(result)
         outcome.update({
-            "status": "completed",
+            "status": _worker_application_status(last_message),
             "failure_code": None,
             "retryable": False,
             "suggested_recovery_action": "No recovery required.",
             "message": last_message,
         })
+        if outcome["status"] == "failed":
+            outcome["failure_code"] = "worker_reported_failure"
+            outcome["failure_detail"] = last_message
+            outcome["retryable"] = True
+            outcome["suggested_recovery_action"] = "Review the worker summary and retry when the blocking issue is resolved."
+        elif outcome["status"] == "needs_captcha":
+            urls = re.findall(r"https?://[^\s)>]+", last_message)
+            captcha_url = urls[-1] if urls else previous.get("url") or apply_url
+            outcome["failure_code"] = "captcha_required"
+            outcome["failure_detail"] = last_message
+            outcome["retryable"] = False
+            outcome["suggested_recovery_action"] = (
+                "Complete the CAPTCHA in its existing browser tab, then select CAPTCHA Done. "
+                "The application will return to the end of the queue."
+            )
+            from src.application.captcha_queue import park_for_captcha
+            await asyncio.to_thread(
+                park_for_captcha, str(job_id), url=captcha_url, workbook_path=_EXCEL_PATH
+            )
+            checkpoint_store.record_step(
+                str(job_id),
+                url=captcha_url,
+                failure_code="captcha_required",
+                failure_detail="CAPTCHA requires user completion.",
+                captcha_status="pending",
+                captcha_detected_at=datetime.now(timezone.utc).isoformat(),
+                captcha_url=captcha_url,
+                retryable=False,
+            )
+            await runtime.events.emit(
+                "captcha.required",
+                {"job_id": str(job_id), "company": company, "title": title, "url": captcha_url},
+            )
+        elif resuming_captcha:
+            # Clear the checkpoint marker once the resumed worker has reached
+            # a terminal non-CAPTCHA result.
+            checkpoint_store.record_step(str(job_id), captcha_status="cleared")
         console.print(f"[bold green]✅ Worker Finished Job {job_id}:[/bold green] {last_message}\n")
-        await runtime.events.emit(
-            "job.completed", {"job_id": str(job_id), "company": company, "title": title}
-        )
 
     except Exception as exc:
         outcome["failure_detail"] = str(exc)
         console.print(f"[bold red]❌ Worker Failed Job {job_id}:[/bold red] {exc}\n")
-        await runtime.events.emit(
-            "job.failed",
-            {"job_id": str(job_id), "company": company, "title": title, "error": str(exc)},
-        )
     finally:
-        final_event = {"job_id": str(job_id), **outcome}
-        log_event("APPLICATION_OUTCOME", final_event)
         if checkpoint_store is not None:
             try:
                 previous = checkpoint_store.load(str(job_id)) or {}
@@ -256,6 +352,7 @@ async def delegate_job_application(job_details: dict) -> dict:
                     failure_detail=outcome["failure_detail"],
                     last_completed_step=outcome["last_completed_step"],
                     retryable=outcome["retryable"],
+                    captcha_status="pending" if outcome["status"] == "needs_captcha" else None,
                 )
             except Exception as checkpoint_exc:
                 log_event("CHECKPOINT_ERROR", {"failure_detail": str(checkpoint_exc)})
@@ -279,7 +376,20 @@ async def delegate_job_application(job_details: dict) -> dict:
             except Exception as metrics_exc:
                 # Metrics must not turn a completed application into a failure.
                 log_event("APPLICATION_METRICS_ERROR", {"failure_detail": str(metrics_exc)})
-    return {"job_id": str(job_id), "title": title, "company": company, **outcome}
+        final_event = {"job_id": str(job_id), **outcome, "metrics": metrics}
+        log_event("APPLICATION_OUTCOME", final_event)
+        await runtime.events.emit(
+            "job.finished",
+            {
+                "job_id": str(job_id),
+                "company": company,
+                "title": title,
+                "status": outcome["status"],
+                "failure_detail": outcome.get("failure_detail"),
+                "metrics": metrics,
+            },
+        )
+    return {"job_id": str(job_id), "title": title, "company": company, **outcome, "metrics": metrics}
 
 
 
@@ -550,10 +660,11 @@ async def select_dropdown_option(field: str, option: str) -> str:
 
 
 @tool
-def get_jobs(filters: list[str] = None, n: int = None) -> list[dict]:
+def get_jobs(filters: list[str] = None, n: int = None, job_id: str | None = None) -> list[dict] | dict:
     """Fetch jobs from data/jobs.xlsx.
 
-    Returns a list of job records sorted by fetched time (oldest first).
+    Returns job records sorted by fetched time (oldest first), or one job
+    dictionary when ``job_id`` is supplied.
     Each record is a dict with keys like id, title, companyName, link,
     applyUrl, application_status, fetched_at, etc.
     Use this tool to get the queue of jobs to apply for.
@@ -563,9 +674,41 @@ def get_jobs(filters: list[str] = None, n: int = None) -> list[dict]:
                  If None, empty [], or containing "ALL", returns all jobs regardless of application_status
                  (including unassigned or blank status values).
         n: Optional maximum number of jobs to return. If None, returns all matching jobs.
+        job_id: Optional exact job ID. Omit this argument entirely to retrieve
+                the queue; do not pass an empty string, "ALL", or "pending".
+                When a real ID is supplied, reads only until that row is found
+                and returns the single job dictionary instead of the full queue.
+                This is the preferred option only when a job ID is known.
     """
     if not _EXCEL_PATH.exists():
         return "No jobs file found. Run the job fetcher first."
+
+    # Some tool-call models serialize omitted optional strings as "". Treat
+    # that exactly like an omitted ID so a normal queue request still works.
+    target_id = str(job_id or "").strip()
+    if target_id:
+        try:
+            from src.data.jobs_workbook import get_job_row
+
+            record = get_job_row(_EXCEL_PATH, target_id)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        except Exception as exc:
+            return f"Could not read {_EXCEL_PATH}: {exc}"
+
+        if record is None:
+            return []
+
+        status = str(record.get("application_status") or "").strip()
+        record["application_status"] = (
+            "Not Applied" if status in {"", "nan", "None"} else status
+        )
+        if filters and not any(str(value).upper() == "ALL" for value in filters):
+            filter_set = {str(value).strip() for value in filters if value}
+            if record["application_status"] not in filter_set:
+                return []
+
+        return {key: value for key, value in record.items() if key not in _HEAVY_JOB_COLUMNS}
 
     try:
         df = pd.read_excel(_EXCEL_PATH, dtype=str)
@@ -595,19 +738,27 @@ def get_jobs(filters: list[str] = None, n: int = None) -> list[dict]:
         filter_set = {str(f).strip() for f in filters if f}
         pending = df[df["application_status"].isin(filter_set)].copy()
 
-    if "fetched_at" in pending.columns:
-        pending["fetched_at"] = pd.to_datetime(pending["fetched_at"], errors="coerce")
-        pending.sort_values("fetched_at", ascending=True, inplace=True)
+    # A resolved CAPTCHA is returned to ``Not Applied`` with a new
+    # ``queue_ready_at`` value.  Prefer it over the original fetch time so the
+    # resumed job goes to the tail rather than jumping ahead of work already
+    # in the queue.
+    fetched_at = (
+        pd.to_datetime(pending["fetched_at"], errors="coerce")
+        if "fetched_at" in pending.columns else pd.Series(pd.NaT, index=pending.index)
+    )
+    queue_ready_at = (
+        pd.to_datetime(pending["queue_ready_at"], errors="coerce")
+        if "queue_ready_at" in pending.columns else pd.Series(pd.NaT, index=pending.index)
+    )
+    pending["_queue_sort_at"] = queue_ready_at.fillna(fetched_at)
+    # Missing timestamps are old, stable rows; keep their source order after
+    # sorting rather than accidentally putting them behind a requeued job.
+    pending["_queue_sort_at"] = pending["_queue_sort_at"].fillna(pd.Timestamp.min)
+    pending.sort_values("_queue_sort_at", ascending=True, kind="stable", inplace=True)
+    pending.drop(columns=["_queue_sort_at"], inplace=True)
 
     # Exclude massive description, metadata, and HTML blob columns to keep payload concise
-    heavy_cols = {
-        "descriptionHtml", "descriptionText", "companyDescription", 
-        "companyAddress", "companyLogo", "inputUrl", "companySlogan", 
-        "companyLinkedinUrl", "trackingId", "refId", "jobPosterName",
-        "jobPosterTitle", "jobPosterPhoto", "jobPosterProfileUrl",
-        "companyEmployeesCount", "benefits"
-    }
-    keep_cols = [c for c in pending.columns if c not in heavy_cols]
+    keep_cols = [c for c in pending.columns if c not in _HEAVY_JOB_COLUMNS]
 
     records = pending[keep_cols].fillna("").to_dict(orient="records")
 
@@ -688,7 +839,18 @@ def update_job_status(job_id: str, status: str) -> str:
             return f"No jobs file found at {_EXCEL_PATH}."
 
         try:
-            from src.data.jobs_workbook import update_job_row
+            from src.application.captcha_queue import NEEDS_CAPTCHA
+            from src.data.jobs_workbook import get_job_row, update_job_row
+            current = get_job_row(_EXCEL_PATH, str(job_id).strip())
+            if (
+                current is not None
+                and str(current.get("application_status") or "").strip() == NEEDS_CAPTCHA
+                and str(status).strip().lower() == "failed"
+            ):
+                return (
+                    f"Job '{job_id}' is waiting for a user CAPTCHA. It cannot be marked Failed; "
+                    "wait for CAPTCHA Done or explicitly requeue it."
+                )
             update_job_row(
                 _EXCEL_PATH,
                 str(job_id).strip(),

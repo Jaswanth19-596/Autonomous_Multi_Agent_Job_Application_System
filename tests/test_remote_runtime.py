@@ -3,6 +3,8 @@ import asyncio
 from src.core.logging import redact_sensitive
 from src.notifications.event_bus import AgentEventBus
 from src.notifications.telegram_formatter import split_telegram_text
+from src.notifications.telegram_formatter import format_event
+from src.notifications.events import AgentEvent
 from src.notifications.telegram_service import TelegramConfig, TelegramService
 from src.runtime.approval_manager import ApprovalManager
 from src.runtime.controller import AgentRuntimeController
@@ -70,6 +72,7 @@ def test_pause_resume_and_stop_are_event_based():
         assert await controller.resume()
         assert await waiter
         assert await controller.stop()
+        assert controller.snapshot().status == "stopped"
         assert not await controller.wait_if_paused()
 
     asyncio.run(scenario())
@@ -93,6 +96,56 @@ def test_telegram_rejects_unauthorized_updates():
     asyncio.run(scenario())
 
 
+def test_telegram_start_recovers_a_stopping_agent_and_leaves_messages_usable():
+    class FakeTelegram(TelegramService):
+        def __init__(self, config, runtime):
+            super().__init__(config, runtime)
+            self.messages = []
+
+        async def _send_direct(self, text, keyboard=None):
+            self.messages.append((text, keyboard))
+
+    async def scenario():
+        runtime = AgentRuntime()
+        await runtime.controller.start("old task")
+        assert await runtime.controller.stop()
+        service = FakeTelegram(TelegramConfig("test-token", 42, True), runtime)
+
+        await service._handle_message("/start")
+
+        assert runtime.controller.snapshot().status == "running"
+        assert service.messages[0][0].startswith("🤖 Agent started")
+        await service._handle_message("Hey")
+        assert await runtime.inputs.messages.get() == "Hey"
+
+    asyncio.run(scenario())
+
+
+def test_telegram_stop_reports_stopped_and_offers_start():
+    class FakeTelegram(TelegramService):
+        def __init__(self, config, runtime):
+            super().__init__(config, runtime)
+            self.messages = []
+
+        async def _send_direct(self, text, keyboard=None):
+            self.messages.append((text, keyboard))
+
+    async def scenario():
+        runtime = AgentRuntime()
+        await runtime.controller.start()
+        service = FakeTelegram(TelegramConfig("test-token", 42, True), runtime)
+
+        await service._handle_message("/stop")
+        await service._handle_message("/status")
+
+        assert runtime.controller.snapshot().status == "stopped"
+        assert service.messages[0][0].startswith("🛑 Agent stopped")
+        assert service.messages[1][0].startswith("Agent: Stopped")
+        assert service.messages[1][1] == [[{"text": "▶️ Start", "callback_data": "command:start"}]]
+
+    asyncio.run(scenario())
+
+
 def test_redaction_and_telegram_splitting_are_safe():
     redacted = redact_sensitive({"api_key": "secret", "nested": "token=abc"})
     assert redacted["api_key"] == "[REDACTED]"
@@ -100,3 +153,22 @@ def test_redaction_and_telegram_splitting_are_safe():
     chunks = split_telegram_text("x" * 9001)
     assert len(chunks) == 3
     assert all(len(chunk) <= 4000 for chunk in chunks)
+
+
+def test_job_finished_notification_includes_outcome_and_efficiency_metrics():
+    message = format_event(AgentEvent("job.finished", {
+        "company": "Acme",
+        "title": "AI Engineer",
+        "status": "applied",
+        "metrics": {
+            "application_duration_seconds": 125.2,
+            "application_tool_calls": 17,
+            "application_cost_usd": 0.0135,
+        },
+    }))
+
+    assert message is not None
+    assert "Status: Applied" in message.text
+    assert "Duration: 2m 5s" in message.text
+    assert "Tool calls: 17" in message.text
+    assert "Model cost: $0.013500" in message.text

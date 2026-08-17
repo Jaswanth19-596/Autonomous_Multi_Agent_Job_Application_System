@@ -1,6 +1,6 @@
 # Greenhouse Applications
 
-- Greenhouse job-board forms often use React Select custom comboboxes (`#question_XXXX`).
+- Greenhouse job-board forms often use React Select custom comboboxes (`#question_XXXX`). On Diligent-style forms, Simplify may prefill work eligibility as “without sponsorship now or in the future” even for F-1 OPT; re-scan and correct it to the exact sponsorship-required option before submitting.
 - **Filling React Select comboboxes:** Type the desired value directly into the combobox input or click the target option element directly by text (`:has-text('...')`). Do NOT open dropdowns and press `Escape` in a loop to pre-scan options.
 - External Air applications can require citizenship-status, onsite availability, office-location, prior-application, employer-agreement, compensation, and start-date questions.
 - Resume upload is enforced at submission (`#resume`); use local file path `/Users/jaswanth/mydocs/myprojects/langgraph/user_details/resume.pdf`.
@@ -18,3 +18,4 @@
 - Embedded Greenhouse forms on employer-branded career pages may be inside a cross-origin iframe; inspect and interact through the form frame. Required React Select values can be committed by selecting the exact visible `role=option`, and the same frame contains the final submit button and confirmation text.
 - On long Impact.com Greenhouse forms, the submit button may remain far below the viewport and Playwright's normal visibility/stability click can time out even after scrolling. Confirm required fields and use the button's DOM click only after verifying the button is enabled; the confirmation page should say "Thank you for applying."
 - Embedded Greenhouse forms can render inside a cross-origin iframe and custom React-select inputs may have blank aria labels. Use the iframe-scoped field IDs from the DOM (for example, `question_<id>`) and commit selections by choosing the exact visible `role=option`; hidden country options can coexist with the active Yes/No menu, so filter options to visible elements.
+- Simplify may prefill required custom answers (especially sponsorship/eligibility) incorrectly or inconsistently with an F-1 OPT profile. Re-scan every required combobox after autofill, and if the helper cannot target an already-selected control, click its exact `role=combobox`, inspect the visible `role=option` list, and select the truthful option once. A standard Greenhouse confirmation URL `/confirmation` indicates successful submission.

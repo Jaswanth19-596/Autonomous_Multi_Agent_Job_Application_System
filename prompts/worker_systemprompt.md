@@ -13,7 +13,15 @@ When you receive a job:
 The user's profile and resume are already available in the conversation context. Do NOT attempt to read them from local files.
 
 ## 2. Handling Captchas
-Whenever you encounter an captcha, leave the application as it is and hand over the execution to the manager. The user will take care of the captcha. Do not close the application or do not open a new job in the same browser. Just say that you have encountered a captcha and hand over the execution to the manager.
+Whenever a page scan reports `captcha_present: true`, do not attempt to solve, bypass, or submit around the CAPTCHA. Leave that application tab open exactly as it is. End the worker run with this exact result (including the current page URL when known):
+
+```text
+status: needs_captcha
+reason: captcha_required
+url: <current application URL>
+```
+
+The manager will keep the tab alive, continue the queue in another tab, and notify the user. When the user marks the CAPTCHA complete, the application is requeued at the end. On a CAPTCHA-resume assignment, use the browser tab-management tool to select the existing application tab before navigating; inspect it and verify the CAPTCHA is gone before taking any form action. If it remains, return `status: needs_captcha` again.
 
 
 ## 3. PLAYWRIGHT IS THE PRIMARY BROWSER TOOL
@@ -61,7 +69,7 @@ Always use Playwright to:
 If an application contains a question whose answer is not available in the provided user profile:
 1. Call `ask_for_profile_answer` with the exact question and, when available,
    the visible answer options.
-2. Wait for the user's answer. Do not use a placeholder or guess.
+2. Wait for the tool to return the user's answer. It pauses the application while the Telegram question is pending. Do not call it again for the same question and do not mark the application failed while waiting.
 3. Use the returned answer to complete the current application.
 4. The tool saves the answer in `data/user_profile.json` for future applications.
 

@@ -52,6 +52,44 @@ def _tool_event(event: AgentEvent, title: str) -> TelegramMessage:
     return TelegramMessage(text)
 
 
+def _format_duration(seconds: Any) -> str:
+    if seconds is None:
+        return "Unavailable"
+    try:
+        duration = max(0, round(float(seconds)))
+    except (TypeError, ValueError):
+        return "Unavailable"
+    minutes, remaining_seconds = divmod(duration, 60)
+    return f"{minutes}m {remaining_seconds}s" if minutes else f"{remaining_seconds}s"
+
+
+def _format_cost(cost: Any) -> str:
+    if cost is None:
+        return "Unavailable"
+    try:
+        return f"${float(cost):.6f}"
+    except (TypeError, ValueError):
+        return "Unavailable"
+
+
+def _job_finished_event(data: dict[str, Any]) -> TelegramMessage:
+    metrics = data.get("metrics") or {}
+    status = str(data.get("status") or "completed").replace("_", " ").title()
+    icon = "✅" if status == "Applied" else "⚠️" if status == "Needs Captcha" else "❌" if status == "Failed" else "🏁"
+    text = (
+        f"{icon} Application Result\n\n"
+        f"Status: {status}\n"
+        f"Company: {data.get('company', 'Unknown')}\n"
+        f"Role: {data.get('title', 'Unknown')}\n\n"
+        f"Duration: {_format_duration(metrics.get('application_duration_seconds'))}\n"
+        f"Tool calls: {metrics.get('application_tool_calls', 'Unavailable')}\n"
+        f"Model cost: {_format_cost(metrics.get('application_cost_usd'))}"
+    )
+    if data.get("failure_detail"):
+        text += f"\n\nDetails:\n{_brief(data['failure_detail'], 1000)}"
+    return TelegramMessage(text)
+
+
 def format_event(event: AgentEvent) -> TelegramMessage | None:
     """Filter routine events and format the useful ones for a phone-sized screen."""
     data = event.data
@@ -77,6 +115,18 @@ def format_event(event: AgentEvent) -> TelegramMessage | None:
             f"Company: {data.get('company', 'Unknown')}\n"
             f"Role: {data.get('title', 'Unknown')}"
         )
+    if event.type == "captcha.required":
+        data = event.data
+        return TelegramMessage(
+            "⚠️ CAPTCHA REQUIRED\n\n"
+            f"Company: {data.get('company', 'Unknown')}\n"
+            f"Role: {data.get('title', 'Unknown')}\n\n"
+            "Complete the CAPTCHA in the existing Chrome tab, then tap Done. "
+            "This application will move to the end of the queue.",
+            [[{"text": "✅ CAPTCHA Done", "callback_data": f"captcha:{data['job_id']}"}]],
+        )
+    if event.type == "job.finished":
+        return _job_finished_event(data)
     if event.type == "job.completed":
         return TelegramMessage(
             "✅ Job Completed\n\n"

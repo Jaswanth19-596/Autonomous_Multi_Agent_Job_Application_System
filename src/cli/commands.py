@@ -25,8 +25,8 @@ console = Console()
 COMMANDS: dict[str, str] = {
     "/index": "Scan repository and generate recursive explore.md site maps",
     "/help": "Show available agent commands and tool capabilities",
-    "/clear": "Reset working state and clear conversation history",
-    "/plan": "Force agent to generate a step-by-step plan before execution",
+    "/clear": "Clear command and agent conversation history",
+    "/plan": "Make the next request plan-only before execution",
 }
 
 
@@ -176,7 +176,8 @@ def run_help() -> None:
         "  web_search  Search the web for data\n"
         "  read_file   Read the contents of a file\n"
         "  update_file Edit the content of a file by replacing a substring\n"
-        "\n[dim]Type [bold]/</bold> to open the autocomplete pop-up.[/dim]\n"
+        "\n[dim]Use a command by entering it exactly on its own line. "
+        "Type [bold]/[/bold] to open the autocomplete pop-up.[/dim]\n"
     )
 
 
@@ -186,10 +187,10 @@ def run_clear() -> None:
 
 
 def run_plan() -> None:
-    """Prompt the agent to always produce a step-by-step plan before acting."""
+    """Enable plan-only mode for the next natural-language request."""
     console.print(
-        "\n[magenta][Plan Mode][/magenta] The agent will generate a step-by-step "
-        "plan before executing any task.\n"
+        "\n[magenta][Plan Mode][/magenta] Your next request will receive a "
+        "step-by-step plan without tool execution.\n"
     )
 
 
@@ -220,5 +221,10 @@ def dispatch(command: str):
 
 def reset_history(history) -> None:
     """Empty the given prompt_toolkit history."""
-    while len(history) > 0:
-        history.pop()
+    # prompt_toolkit's InMemoryHistory does not expose pop() or clear().
+    # Clear both backing collections so entries do not reappear on the next
+    # prompt after the history loader has already run.
+    if hasattr(history, "_storage"):
+        history._storage.clear()
+    if hasattr(history, "_loaded_strings"):
+        history._loaded_strings.clear()

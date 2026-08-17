@@ -7,7 +7,7 @@ from src.automation.simplify_auto import (
     form_signature_from_playwright_output,
     reset_auto_simplify_attempts,
 )
-from src.agent.nodes import _is_transient_read_timeout
+from src.agent.nodes import _is_retryable_transport_error, _is_transient_read_timeout, _safe_to_retry_tool
 
 
 def test_signature_code_detects_non_simplify_form_controls():
@@ -35,3 +35,18 @@ def test_auto_simplify_attempt_is_limited_to_one_attempt_per_form_step():
 def test_read_timeout_is_retryable_but_other_errors_are_not():
     assert _is_transient_read_timeout(RuntimeError("The read operation timed out"))
     assert not _is_transient_read_timeout(RuntimeError("invalid selector"))
+
+
+def test_bad_record_mac_is_retryable_but_certificate_errors_are_not():
+    assert _is_retryable_transport_error(
+        RuntimeError("[SSL: SSLV3_ALERT_BAD_RECORD_MAC] sslv3 alert bad record mac")
+    )
+    assert not _is_retryable_transport_error(
+        RuntimeError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed")
+    )
+
+
+def test_only_idempotent_browser_operations_are_retried():
+    assert _safe_to_retry_tool("playwright_browser_type")
+    assert _safe_to_retry_tool("playwright_browser_navigate")
+    assert not _safe_to_retry_tool("playwright_browser_click")

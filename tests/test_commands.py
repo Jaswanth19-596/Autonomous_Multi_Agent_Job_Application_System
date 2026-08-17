@@ -3,12 +3,16 @@
 import os
 import tempfile
 
+from prompt_toolkit.history import InMemoryHistory
+
 from src.cli.commands import (
     AgentCommandCompleter,
     COMMANDS,
     is_command,
+    reset_history,
     run_index,
 )
+from src.agent.nodes import user_input_condition
 
 
 class FakeDocument:
@@ -53,3 +57,19 @@ def test_index_generates_explore_md(tmp_path, capsys):
         assert "__pycache__" not in content
     finally:
         os.chdir(old)
+
+
+def test_reset_history_clears_prompt_toolkit_memory():
+    history = InMemoryHistory()
+    history.append_string("first request")
+    history.append_string("second request")
+
+    reset_history(history)
+
+    assert history.get_strings() == []
+    assert list(history.load_history_strings()) == []
+
+
+def test_command_input_routes_back_to_prompt_without_llm_execution():
+    assert user_input_condition({"skip_execution": True}) == "user_input_node"
+    assert user_input_condition({"skip_execution": False}) == "execution_node"

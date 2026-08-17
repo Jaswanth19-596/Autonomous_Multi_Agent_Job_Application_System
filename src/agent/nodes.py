@@ -2,6 +2,7 @@ import os
 import re
 import time
 import asyncio
+import sys
 from dotenv import load_dotenv
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage, SystemMessage
 from prompt_toolkit.history import InMemoryHistory
@@ -12,8 +13,6 @@ from src.cli.commands import (
     is_command,
     dispatch,
     reset_history,
-    COMMANDS,
-    run_help,
 )
 from rich.console import Console
 from rich.markdown import Markdown
@@ -26,10 +25,57 @@ console = Console()
 history = InMemoryHistory()
 
 
+_RETRYABLE_TRANSPORT_MARKERS = (
+    "read operation timed out",
+    "readtimeout",
+    "sslv3_alert_bad_record_mac",
+    "bad record mac",
+    "tlsv1 alert",
+    "tls handshake timeout",
+    "connection reset by peer",
+    "connection aborted",
+    "remoteprotocolerror",
+    "server disconnected",
+    "temporarily unavailable",
+    "temporary failure",
+    "broken pipe",
+)
+
+
+def _is_retryable_transport_error(error: Exception) -> bool:
+    """Return whether retrying can recover a transient model/MCP connection error.
+
+    In particular, ``bad record mac`` is a TLS record-integrity failure caused
+    by a broken connection or intermediary.  It is safe to retry the *request*
+    on a new connection, but certificate/configuration errors are deliberately
+    excluded because retries cannot repair them.
+    """
+    text = str(error).lower()
+    return any(marker in text for marker in _RETRYABLE_TRANSPORT_MARKERS)
+
+
 def _is_transient_read_timeout(error: Exception) -> bool:
-    """Recognize retryable transport timeouts from model/MCP streaming."""
+    """Recognize only read timeouts for existing callers."""
     text = str(error).lower()
     return "read operation timed out" in text or "readtimeout" in text
+
+
+def _safe_to_retry_tool(tool_name: str) -> bool:
+    """Limit automatic retries to idempotent browser operations.
+
+    A failed click can leave a submission in an unknown state, so it must be
+    reported to the worker for verification rather than clicked again.
+    """
+    return tool_name in {
+        "playwright_browser_type",
+        "playwright_browser_fill_form",
+        "playwright_browser_evaluate",
+        "playwright_browser_navigate",
+        "playwright_browser_select_option",
+        "playwright_browser_check",
+        "playwright_browser_uncheck",
+        "playwright_browser_file_upload",
+    }
 
 
 
@@ -56,52 +102,67 @@ DANGEROUS_TOOLS = {
 
 async def user_input_node(state):
     # Interactive REPL with pop-up autocomplete, styling & history
-    session = build_session(history)
     from src.runtime.services import get_runtime
 
     runtime = get_runtime()
-    terminal_input = asyncio.ensure_future(prompt_for_input_async(session))
     remote_input = asyncio.create_task(runtime.inputs.messages.get())
-    done, pending = await asyncio.wait(
-        {terminal_input, remote_input}, return_when=asyncio.FIRST_COMPLETED
-    )
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
-    message = next(iter(done)).result()
+    if not sys.stdin.isatty():
+        # launchd supplies no usable stdin. The local control socket and
+        # optional Telegram service feed this same remote-input queue.
+        message = await remote_input
+    else:
+        session = build_session(history)
+        terminal_input = asyncio.ensure_future(prompt_for_input_async(session))
+        done, pending = await asyncio.wait(
+            {terminal_input, remote_input}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        message = next(iter(done)).result()
 
     # Dispatch registered slash commands directly (no LLM round-trip)
     if is_command(message):
-        if message == "/index":
-            dispatch("/index")
-        elif message == "/help":
-            run_help()
-        elif message == "/clear":
+        if message == "/clear":
             reset_history(history)
             dispatch("/clear")
-            # Reset graph state: wipe messages & tool calls
+            from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
+            from src.agent.app import MANAGER_SYSTEM_PROMPT
+
             return {
                 "messages": [
-                    HumanMessage(content=f"The user ran `{message}` — state has been reset.")
+                    RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                    SystemMessage(content=MANAGER_SYSTEM_PROMPT),
                 ],
                 "tool_calls": [],
                 "approved": False,
+                "plan_mode": False,
+                "skip_execution": True,
             }
-        elif message == "/plan":
+        if message == "/plan":
             dispatch("/plan")
-        else:
-            dispatch(message)
+            return {
+                "tool_calls": [],
+                "approved": False,
+                "plan_mode": True,
+                "skip_execution": True,
+            }
 
-        # Other slash commands simply loop back to the prompt
+        dispatch(message)
         return {
-            "messages": [HumanMessage(content=f"The user ran the slash command `{message}`.")],
             "tool_calls": [],
             "approved": False,
+            "skip_execution": True,
         }
 
     await runtime.controller.set_task(message)
     await runtime.events.emit("task.started", {"task": message})
-    return {"messages": [HumanMessage(content=message)]}
+    return {"messages": [HumanMessage(content=message)], "skip_execution": False}
+
+
+def user_input_condition(state):
+    """Keep local slash commands out of the model execution loop."""
+    return "user_input_node" if state.get("skip_execution") else "execution_node"
 
 # def _prune_messages(messages: list, min_history_to_prune: int = 24) -> tuple[list, int]:
 #     """Prunes heavy DOM inspection ToolMessages (snapshot, find, evaluate, run_code_unsafe, screenshot)
@@ -157,6 +218,16 @@ async def execution_node(state, config=None):
 
     # pruned_msgs, num_pruned = _prune_messages(state["messages"])
     pruned_msgs, num_pruned = state["messages"], 0
+    plan_mode = state.get("plan_mode", False)
+    if plan_mode:
+        planning_instruction = SystemMessage(
+            content=(
+                "Plan-only mode is active for this request. Give a concise, "
+                "step-by-step plan, identify any needed user decisions, and do "
+                "not call tools or execute actions."
+            )
+        )
+        pruned_msgs = [*pruned_msgs[:-1], planning_instruction, pruned_msgs[-1]]
     if num_pruned > 0:
         prefix = get_job_prefix()
         console.print(f"{prefix}[dim cyan]⚡ Context optimized: pruned {num_pruned} old DOM payload(s)[/dim cyan]")
@@ -175,16 +246,16 @@ async def execution_node(state, config=None):
             full = attempt_full
             break
         except Exception as exc:
-            if not _is_transient_read_timeout(exc) or attempt == max_attempts:
+            if not _is_retryable_transport_error(exc) or attempt == max_attempts:
                 raise
             delay_seconds = attempt
             console.print(
-                f"{get_job_prefix()}[yellow]Model read timed out; retrying "
+                f"{get_job_prefix()}[yellow]Model connection interrupted; retrying "
                 f"({attempt}/{max_attempts}) in {delay_seconds}s…[/yellow]"
             )
             log_event(
-                "MODEL_READ_TIMEOUT_RETRY",
-                {"attempt": attempt, "delay_seconds": delay_seconds},
+                "MODEL_TRANSPORT_RETRY",
+                {"attempt": attempt, "delay_seconds": delay_seconds, "error": str(exc)},
             )
             await asyncio.sleep(delay_seconds)
 
@@ -194,7 +265,8 @@ async def execution_node(state, config=None):
 
     return {
         "messages": [full],
-        "tool_calls": full.tool_calls if full.tool_calls else []
+        "tool_calls": full.tool_calls if full.tool_calls else [],
+        "plan_mode": False if plan_mode else state.get("plan_mode", False),
     }
 
 
@@ -365,8 +437,36 @@ async def tool_node(state):
                     pre_auto_simplify_result = await auto_simplify_if_new_form(
                         tool_call["name"]
                     )
-                # Direct execution without gate checks
-                result = await tool.ainvoke(tool_call["args"])
+                # A retry starts a new MCP connection but keeps the existing
+                # Chrome tab and already-filled controls.  Never retry clicks:
+                # a submit may have reached the ATS despite its failed reply.
+                max_tool_attempts = 3 if _safe_to_retry_tool(tool_call["name"]) else 1
+                for tool_attempt in range(1, max_tool_attempts + 1):
+                    try:
+                        result = await tool.ainvoke(tool_call["args"])
+                        break
+                    except Exception as exc:
+                        if (
+                            tool_attempt == max_tool_attempts
+                            or not _is_retryable_transport_error(exc)
+                        ):
+                            raise
+                        delay_seconds = tool_attempt
+                        console.print(
+                            f"{prefix}[yellow]Browser connection interrupted; retrying "
+                            f"{tool_call['name']} ({tool_attempt}/{max_tool_attempts}) "
+                            f"in {delay_seconds}s…[/yellow]"
+                        )
+                        log_event(
+                            "TOOL_TRANSPORT_RETRY",
+                            {
+                                "tool": tool_call["name"],
+                                "attempt": tool_attempt,
+                                "delay_seconds": delay_seconds,
+                                "error": str(exc),
+                            },
+                        )
+                        await asyncio.sleep(delay_seconds)
                 if tool_call["name"] == "playwright_browser_navigate":
                     record_application_destination(tool_call["args"].get("url"))
                     destination = re.search(r"Page URL:\s*(https?://[^\s)]+)", str(result))
