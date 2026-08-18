@@ -17,6 +17,8 @@ _SENSITIVE_KEYS = re.compile(
     r"(?:pass(?:word|wd)?|secret|token|cookie|authorization|api[-_]?key|otp|one[-_]?time[-_]?code)",
     re.IGNORECASE,
 )
+_SENSITIVE_FIELD_CONTEXT_KEYS = {"name", "element", "label", "field", "target"}
+_SENSITIVE_FIELD_VALUE_KEYS = {"value", "text", "answer", "content"}
 _INLINE_SECRET = re.compile(
     r"(?i)(\b(?:password|passwd|pwd|secret|token|cookie|authorization|api[-_]?key|otp)\b['\"]?\s*[:=]\s*)"
     r"(?:bearer\s+)?([^\s,;}&\]]+|\"[^\"]*\"|'[^']*')"
@@ -26,8 +28,25 @@ _INLINE_SECRET = re.compile(
 def redact_sensitive(value):
     """Return a recursively redacted copy suitable for logs and terminals."""
     if isinstance(value, dict):
+        # Browser tools commonly receive fields in the form
+        # {"name": "password", "value": "..."}.  The secret is therefore
+        # not keyed as ``password`` itself, so inspect the field descriptor
+        # before recursively rendering its values.
+        contains_sensitive_field = any(
+            str(key).lower() in _SENSITIVE_FIELD_CONTEXT_KEYS
+            and _SENSITIVE_KEYS.search(str(item))
+            for key, item in value.items()
+        )
         return {
-            key: "[REDACTED]" if _SENSITIVE_KEYS.search(str(key)) else redact_sensitive(item)
+            key: "[REDACTED]"
+            if (
+                _SENSITIVE_KEYS.search(str(key))
+                or (
+                    contains_sensitive_field
+                    and str(key).lower() in _SENSITIVE_FIELD_VALUE_KEYS
+                )
+            )
+            else redact_sensitive(item)
             for key, item in value.items()
         }
     if isinstance(value, list):

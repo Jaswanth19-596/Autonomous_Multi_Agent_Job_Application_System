@@ -75,3 +75,41 @@ def has_captcha_held_job(*, workbook_path: Path | None = None) -> bool:
             )
         finally:
             workbook.close()
+
+
+def captcha_held_job_ids(*, workbook_path: Path | None = None) -> list[str]:
+    """Return the IDs of applications waiting for a user-completed CAPTCHA.
+
+    This supports a text-command fallback when Telegram does not render an
+    inline ``CAPTCHA Done`` button (for example, in a notification history or
+    a client that has hidden inline keyboards).
+    """
+    path = workbook_path or JOBS_FILE
+    if not path.exists():
+        return []
+
+    from openpyxl import load_workbook
+
+    with workbook_lock:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        try:
+            sheet = workbook["Applications"] if "Applications" in workbook.sheetnames else workbook.worksheets[0]
+            header = {
+                str(value): index
+                for index, value in enumerate(next(sheet.iter_rows(max_row=1, values_only=True), ()))
+                if value
+            }
+            status_index = header.get("application_status")
+            id_index = header.get("id")
+            if status_index is None or id_index is None:
+                return []
+            return [
+                str(row[id_index]).strip()
+                for row in sheet.iter_rows(min_row=2, values_only=True)
+                if status_index < len(row)
+                and str(row[status_index] or "").strip() == NEEDS_CAPTCHA
+                and id_index < len(row)
+                and str(row[id_index] or "").strip()
+            ]
+        finally:
+            workbook.close()

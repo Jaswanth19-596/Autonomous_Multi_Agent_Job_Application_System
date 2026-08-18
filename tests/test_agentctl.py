@@ -39,4 +39,7 @@ def test_control_socket_is_under_the_project_log_directory(tmp_path):
 
 def test_launchd_path_includes_the_user_node_bin_before_system_paths(tmp_path):
     path = agentctl.launchd_path(tmp_path)
-    assert path.split(":")[:2] == [str(tmp_path / ".local" / "bin"), "/opt/homebrew/bin"]
+    entries = path.split(":")
+    assert str(tmp_path / ".local" / "bin") in entries
+    assert "/opt/homebrew/bin" in entries
+    assert entries.index(str(tmp_path / ".local" / "bin")) < entries.index("/opt/homebrew/bin")

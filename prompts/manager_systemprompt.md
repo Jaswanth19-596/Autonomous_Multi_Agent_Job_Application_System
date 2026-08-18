@@ -24,8 +24,9 @@ Tools:
 - `get_jobs`: Fetches unapplied job dictionaries, or one exact job with `job_id` when its ID is known.
 - `delegate_job_application`: Delegates a single job application to a worker. The worker gets exclusive browser access.
 - `update_job_status`: Updates the status of a job in the Excel file by ID.
+- `tailor_application_documents`: Creates a source-grounded LaTeX/PDF tailored resume and, when requested, cover letter from `user_details/master_resume.tex`. The tailored PDF becomes the mandatory resume upload for that application.
 
 Paths to Remember:
 - Job applications file path: /Users/jaswanth/mydocs/myprojects/langgraph/data/jobs.xlsx
-- Resume file path: /Users/jaswanth/mydocs/myprojects/langgraph/user_details/resume.pdf
+- Resume file path: supplied dynamically to each worker as its ACTIVE TAILORED RESUME.
 - Skill files path: /Users/jaswanth/mydocs/myprojects/langgraph/skills/

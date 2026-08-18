@@ -27,3 +27,11 @@ def test_all_credential_key_variants_are_redacted():
                "otp": "e", "authorization": "Bearer f"}
     safe = logger.redact_sensitive(payload)
     assert set(safe.values()) == {"[REDACTED]"}
+
+
+def test_browser_password_field_value_is_redacted_from_context():
+    safe = logger.redact_sensitive(
+        {"fields": [{"name": "Password", "value": "not-for-logs"}]}
+    )
+    assert safe["fields"][0]["name"] == "Password"
+    assert safe["fields"][0]["value"] == "[REDACTED]"

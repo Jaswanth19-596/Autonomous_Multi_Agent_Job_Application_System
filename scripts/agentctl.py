@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import time
+import shutil
 from pathlib import Path
 from typing import Sequence
 
@@ -54,7 +55,26 @@ def launchd_path(home: Path | None = None) -> str:
     npx, so that directory must be present before the system defaults.
     """
     home = home or Path.home()
+    node_paths: list[Path] = []
+    npx = shutil.which("npx")
+    if npx:
+        # Do not resolve a symlink here: some Node distributions point npx at
+        # npm's internal scripts, while its *invocation* directory is the one
+        # that also contains the working node executable.
+        node_paths.append(Path(npx).parent)
+
+    # Support common user-local Node managers even when agentctl is invoked
+    # from a non-interactive shell.  Keep the active ``npx`` directory first.
+    node_paths.extend(sorted((home / ".nvm" / "versions" / "node").glob("*/bin"), reverse=True))
+    node_paths.extend(
+        [
+            home / ".local" / "bin",
+            home / ".volta" / "bin",
+            home / ".asdf" / "shims",
+        ]
+    )
     paths = [
+        *node_paths,
         home / ".local" / "bin",
         Path("/opt/homebrew/bin"),
         Path("/usr/local/bin"),
@@ -63,7 +83,8 @@ def launchd_path(home: Path | None = None) -> str:
         Path("/usr/sbin"),
         Path("/sbin"),
     ]
-    return ":".join(str(path) for path in paths)
+    # Preserve order while avoiding duplicate PATH entries.
+    return ":".join(dict.fromkeys(str(path) for path in paths))
 
 
 def launch_agent_definition(root: Path, python: Path, logs: Path) -> dict:

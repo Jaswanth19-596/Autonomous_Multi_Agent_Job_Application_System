@@ -27,6 +27,7 @@ from src.agent.tools import (
     select_workday_hear_about_us,
     select_dropdown_option,
     ask_for_profile_answer,
+    tailor_application_documents,
     tools_by_name,
     worker_model_holder,
     get_job_profile_from_url,
@@ -43,7 +44,7 @@ from src.runtime.control_socket import LocalControlSocket
 mcp_manager = MCPManager("mcp_client/servers.json")
 MODEL_NAME = os.environ.get("OPENROUTER_MODEL", "openai/gpt-5.6-luna")
 
-manager_tools = [delegate_job_application, get_jobs, update_job_status, get_job_profile_from_url, insert_job_profile_to_excel]
+manager_tools = [delegate_job_application, get_jobs, update_job_status, get_job_profile_from_url, insert_job_profile_to_excel, tailor_application_documents]
 worker_tools = [
     web_search,
     update_file,
@@ -54,6 +55,7 @@ worker_tools = [
     select_workday_hear_about_us,
     select_dropdown_option,
     ask_for_profile_answer,
+    tailor_application_documents,
 ]
 
 
@@ -106,6 +108,7 @@ async def initialize_tools():
         select_workday_hear_about_us,
         select_dropdown_option,
         ask_for_profile_answer,
+        tailor_application_documents,
     ] + mcp_tools
     worker_model = model.bind_tools(worker_tools)
     worker_model_holder["model"] = worker_model
@@ -126,6 +129,7 @@ class ManagerState(MessagesState, total = False):
     model: Any = None
     plan_mode: bool = False
     skip_execution: bool = False
+    queue_exhausted: bool = False
 
 class WorkerState(MessagesState, total = False):
     approved: bool = False
@@ -134,6 +138,10 @@ class WorkerState(MessagesState, total = False):
 
 
 def execution_condition(state):
+    # A queue lookup returning no records is an idle state. Waiting for a new
+    # local/Telegram message prevents the model from re-querying forever.
+    if state.get("queue_exhausted"):
+        return "user_input_node"
     if state['tool_calls']:
         return "human_approval_node"
     return "user_input_node"

@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +18,12 @@ from src.notifications.telegram_formatter import TelegramMessage, format_event, 
 from src.runtime.services import AgentRuntime
 
 logger = logging.getLogger(__name__)
+
+
+_CAPTCHA_DONE_TEXT = re.compile(
+    r"^/?captcha(?:\s+(?:done|complete|completed))?(?:\s+([\w-]+))?[.!]?$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,30 +162,33 @@ class TelegramService:
             await self._send_direct("Answer recorded." if resolved else "That question is no longer active.")
             return
         if action == "captcha":
-            try:
-                from src.application.captcha_queue import requeue_after_captcha
-
-                requeued = await asyncio.to_thread(requeue_after_captcha, remainder)
-            except Exception as exc:
-                logger.warning("Could not requeue CAPTCHA application %s: %s", remainder, exc)
-                requeued = False
-            if requeued:
-                # If the normal queue drained while the user was solving the
-                # CAPTCHA, wake the manager so this tail item is not stranded
-                # waiting for an unrelated manual message.
-                await self.runtime.inputs.submit_message(
-                    "Continue processing the job queue; a CAPTCHA-held application was requeued."
-                )
-            await self._send_direct(
-                "✅ CAPTCHA recorded. The application has been moved to the end of the queue."
-                if requeued
-                else "That CAPTCHA application is no longer waiting."
-            )
+            await self._complete_captcha(remainder)
             return
         if action == "command":
             await self._handle_message("/" + remainder)
 
     async def _handle_message(self, text: str) -> None:
+        captcha_done = _CAPTCHA_DONE_TEXT.fullmatch(text.strip())
+        if captcha_done:
+            job_id = captcha_done.group(1)
+            if not job_id:
+                from src.application.captcha_queue import captcha_held_job_ids
+
+                held_job_ids = await asyncio.to_thread(captcha_held_job_ids)
+                if len(held_job_ids) == 1:
+                    job_id = held_job_ids[0]
+                elif len(held_job_ids) > 1:
+                    await self._send_direct(
+                        "More than one application is waiting for a CAPTCHA. "
+                        "Reply `captcha done <job id>` to resume the right one."
+                    )
+                    return
+                else:
+                    await self._send_direct("No CAPTCHA-held application is waiting.")
+                    return
+            await self._complete_captcha(job_id)
+            return
+
         command = text.split(maxsplit=1)[0].lower()
         if command == "/start":
             if self.runtime.controller.snapshot().status == "running":
@@ -210,6 +220,28 @@ class TelegramService:
             await self._send_direct("Commands:\n/start\n/status\n/pause\n/resume\n/stop\n/help\n\nOther messages are queued for the existing manager agent.")
             return
         await self.runtime.inputs.submit_message(text)
+
+    async def _complete_captcha(self, job_id: str) -> None:
+        """Requeue a CAPTCHA-held application and wake an idle manager."""
+        try:
+            from src.application.captcha_queue import requeue_after_captcha
+
+            requeued = await asyncio.to_thread(requeue_after_captcha, job_id)
+        except Exception as exc:
+            logger.warning("Could not requeue CAPTCHA application %s: %s", job_id, exc)
+            requeued = False
+        if requeued:
+            # If the normal queue drained while the user was solving the
+            # CAPTCHA, wake the manager so this tail item is not stranded
+            # waiting for an unrelated manual message.
+            await self.runtime.inputs.submit_message(
+                "Continue processing the job queue; a CAPTCHA-held application was requeued."
+            )
+        await self._send_direct(
+            "✅ CAPTCHA recorded. The application has been moved to the end of the queue."
+            if requeued
+            else "That CAPTCHA application is no longer waiting."
+        )
 
     def _status_keyboard(self) -> list[list[dict[str, str]]]:
         status = self.runtime.controller.snapshot().status

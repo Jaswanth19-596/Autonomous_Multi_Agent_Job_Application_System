@@ -78,6 +78,19 @@ def _safe_to_retry_tool(tool_name: str) -> bool:
     }
 
 
+def _terminal_input_is_available() -> bool:
+    """Return whether this process has an interactive terminal to read from.
+
+    A launchd job has no usable stdin.  Some pseudo-terminal configurations
+    still report ``isatty()`` as true, then prompt_toolkit raises EOFError;
+    treat that the same as non-interactive input and wait on the control queue.
+    """
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except (AttributeError, OSError):
+        return False
+
+
 
 # Tools that require explicit human approval before execution.
 # Everything else is auto-approved.
@@ -106,20 +119,35 @@ async def user_input_node(state):
 
     runtime = get_runtime()
     remote_input = asyncio.create_task(runtime.inputs.messages.get())
-    if not sys.stdin.isatty():
+    if not _terminal_input_is_available():
         # launchd supplies no usable stdin. The local control socket and
         # optional Telegram service feed this same remote-input queue.
         message = await remote_input
     else:
-        session = build_session(history)
-        terminal_input = asyncio.ensure_future(prompt_for_input_async(session))
-        done, pending = await asyncio.wait(
-            {terminal_input, remote_input}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        message = next(iter(done)).result()
+        terminal_input = None
+        try:
+            session = build_session(history)
+            terminal_input = asyncio.ensure_future(prompt_for_input_async(session))
+            done, pending = await asyncio.wait(
+                {terminal_input, remote_input}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if terminal_input in done:
+                try:
+                    message = terminal_input.result()
+                except (EOFError, OSError):
+                    # A detached service can look interactive initially but
+                    # fail when it reads stdin. Keep the remote queue alive.
+                    message = await remote_input
+            else:
+                message = remote_input.result()
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        except (EOFError, OSError):
+            if terminal_input is not None:
+                terminal_input.cancel()
+                await asyncio.gather(terminal_input, return_exceptions=True)
+            message = await remote_input
 
     # Dispatch registered slash commands directly (no LLM round-trip)
     if is_command(message):
@@ -138,6 +166,7 @@ async def user_input_node(state):
                 "approved": False,
                 "plan_mode": False,
                 "skip_execution": True,
+                "queue_exhausted": False,
             }
         if message == "/plan":
             dispatch("/plan")
@@ -146,6 +175,7 @@ async def user_input_node(state):
                 "approved": False,
                 "plan_mode": True,
                 "skip_execution": True,
+                "queue_exhausted": False,
             }
 
         dispatch(message)
@@ -153,11 +183,16 @@ async def user_input_node(state):
             "tool_calls": [],
             "approved": False,
             "skip_execution": True,
+            "queue_exhausted": False,
         }
 
     await runtime.controller.set_task(message)
     await runtime.events.emit("task.started", {"task": message})
-    return {"messages": [HumanMessage(content=message)], "skip_execution": False}
+    return {
+        "messages": [HumanMessage(content=message)],
+        "skip_execution": False,
+        "queue_exhausted": False,
+    }
 
 
 def user_input_condition(state):
@@ -351,12 +386,17 @@ async def tool_node(state):
         form_signature_from_playwright_output,
     )
     from src.core.logging import get_job_prefix, log_event, redact_sensitive
+    from src.application.resume_selection import (
+        enforce_tailored_resume_paths,
+        tailored_resume_requirement,
+    )
     from src.agent.tools import tools_by_name
     from src.runtime.services import get_runtime
 
     # Async because MCP tools are coroutine-only StructuredTools; ainvoke also
     # covers the sync native tools by running them in an executor.
     tool_responses = []
+    queue_exhausted = False
     prefix = get_job_prefix()
     runtime = get_runtime()
 
@@ -384,7 +424,8 @@ async def tool_node(state):
             )
             result = await simplify.ainvoke({})
             log_event("AUTO_SIMPLIFY", {"control_count": control_count, "result": str(result)})
-            return str(result)
+            requirement = tailored_resume_requirement()
+            return f"{result}\n\n{requirement}" if requirement else str(result)
         except Exception as exc:
             # Detection is an optimization. The normal worker can still inspect
             # and complete the form if an ATS rejects page inspection.
@@ -402,14 +443,22 @@ async def tool_node(state):
             continue
         record_tool_call()
         await runtime.controller.set_tool(tool_call["name"])
+        effective_args = enforce_tailored_resume_paths(tool_call.get("args", {}))
+        tailored_resume_path_enforced = effective_args != tool_call.get("args", {})
+        if tailored_resume_path_enforced:
+            log_event(
+                "TAILORED_RESUME_PATH_ENFORCED",
+                {"tool": tool_call["name"], "args": effective_args},
+            )
+        safe_args = redact_sensitive(effective_args)
         await runtime.events.emit(
-            "tool.started", {"tool": tool_call["name"], "args": tool_call.get("args", {}), "prefix": prefix}
+            "tool.started", {"tool": tool_call["name"], "args": safe_args, "prefix": prefix}
         )
         log_event(
             "TOOL_CALL",
             {
                 "tool": tool_call["name"],
-                "args": tool_call.get("args", {}),
+                "args": safe_args,
             },
         )
 
@@ -420,7 +469,7 @@ async def tool_node(state):
             )
             log_event("TOOL_ERROR", result)
             await runtime.events.emit(
-                "tool.failed", {"tool": tool_call["name"], "args": tool_call.get("args", {}), "error": result, "prefix": prefix}
+                "tool.failed", {"tool": tool_call["name"], "args": safe_args, "error": result, "prefix": prefix}
             )
         else:
             tool = tools_by_name[tool_call["name"]]
@@ -443,7 +492,7 @@ async def tool_node(state):
                 max_tool_attempts = 3 if _safe_to_retry_tool(tool_call["name"]) else 1
                 for tool_attempt in range(1, max_tool_attempts + 1):
                     try:
-                        result = await tool.ainvoke(tool_call["args"])
+                        result = await tool.ainvoke(effective_args)
                         break
                     except Exception as exc:
                         if (
@@ -468,7 +517,7 @@ async def tool_node(state):
                         )
                         await asyncio.sleep(delay_seconds)
                 if tool_call["name"] == "playwright_browser_navigate":
-                    record_application_destination(tool_call["args"].get("url"))
+                    record_application_destination(effective_args.get("url"))
                     destination = re.search(r"Page URL:\s*(https?://[^\s)]+)", str(result))
                     if destination:
                         record_application_destination(destination.group(1))
@@ -478,12 +527,19 @@ async def tool_node(state):
                 )
                 if auto_simplify_result:
                     result = f"{result}\n\n{auto_simplify_result}"
+                if tailored_resume_path_enforced:
+                    requirement = tailored_resume_requirement()
+                    result = f"{result}\n\n{requirement}" if requirement else result
+                if tool_call["name"] == "get_jobs" and isinstance(result, list) and not result:
+                    # No more work is a normal idle state, not a reason for
+                    # the manager model to call get_jobs until recursion ends.
+                    queue_exhausted = True
                 log_event("TOOL_RESULT", str(result))
                 await runtime.events.emit(
                     "tool.completed",
                     {
                         "tool": tool_call["name"],
-                        "args": tool_call.get("args", {}),
+                        "args": safe_args,
                         "result": str(result),
                         "notify_completion": tool_call["name"] in {"delegate_job_application", "update_job_status"},
                     },
@@ -494,7 +550,7 @@ async def tool_node(state):
                 log_event("TOOL_ERROR", str(e))
                 await runtime.events.emit(
                     "tool.failed",
-                    {"tool": tool_call["name"], "args": tool_call.get("args", {}), "error": str(e), "prefix": prefix},
+                    {"tool": tool_call["name"], "args": safe_args, "error": str(e), "prefix": prefix},
                 )
 
         tool_responses.append(
@@ -502,7 +558,7 @@ async def tool_node(state):
         )
         await runtime.controller.set_tool(None)
 
-    return {"messages": tool_responses}
+    return {"messages": tool_responses, "queue_exhausted": queue_exhausted}
 
 
 

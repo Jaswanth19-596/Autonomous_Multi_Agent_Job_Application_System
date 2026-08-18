@@ -134,6 +134,43 @@ ask_for_profile_answer = StructuredTool.from_function(
 
 
 @tool
+async def tailor_application_documents(
+    job_description: str,
+    company: str,
+    title: str,
+    include_cover_letter: bool = False,
+) -> dict:
+    """Create source-grounded tailored LaTeX/PDF application documents.
+
+    Requires ``user_details/master_resume.tex``. The master is never changed;
+    output files are written to ``user_details/tailored`` and must be used only
+    after the returned LaTeX/PDF files are reviewed.
+    """
+    try:
+        from src.application.tailoring import tailor_documents
+
+        result = await tailor_documents(
+            job_description=job_description,
+            company=company,
+            title=title,
+            include_cover_letter=include_cover_letter,
+        )
+    except Exception as exc:
+        return {"status": "blocked", "reason": str(exc)}
+    from src.application.resume_selection import activate_tailored_resume
+
+    resume_pdf = activate_tailored_resume(result.resume_pdf)
+    return {
+        "status": "ready",
+        "resume_tex": str(result.resume_tex),
+        "resume_pdf": str(resume_pdf),
+        "cover_letter_tex": str(result.cover_letter_tex) if result.cover_letter_tex else None,
+        "cover_letter_pdf": str(result.cover_letter_pdf) if result.cover_letter_pdf else None,
+        "note": "The tailored resume is now mandatory for this application and will be used for resume uploads.",
+    }
+
+
+@tool
 async def delegate_job_application(job_details: dict) -> dict:
     """Delegate a single job application to a worker subagent.
     The worker gets exclusive access to the browser. Jobs are processed one at a time.
@@ -144,6 +181,9 @@ async def delegate_job_application(job_details: dict) -> dict:
     from src.agent.app import MODEL_NAME, build_worker_graph, WORKER_SYSTEM_PROMPT
     # pyrefly: ignore [missing-import]
     from src.automation.simplify_auto import reset_auto_simplify_attempts
+    from src.application.resume_selection import clear_active_tailored_resume
+
+    clear_active_tailored_resume()
 
     user_profile = UserProfile.build_user_profile(
     str(_BASE_DIR / "data" / "user_profile.json"))
@@ -171,6 +211,19 @@ async def delegate_job_application(job_details: dict) -> dict:
     title = job_details.get("title", "Unknown position")
     company = job_details.get("companyName", "Unknown company")
     apply_url = job_details.get("link") or job_details.get("applyUrl")
+    try:
+        from src.data.jobs_workbook import get_job_row
+
+        stored_job = get_job_row(_EXCEL_PATH, str(job_id)) or {}
+    except Exception:
+        stored_job = {}
+    job_description = str(
+        job_details.get("descriptionText")
+        or job_details.get("description")
+        or stored_job.get("descriptionText")
+        or stored_job.get("description")
+        or ""
+    ).strip()
     from src.runtime.services import get_runtime
 
     runtime = get_runtime()
@@ -209,6 +262,25 @@ async def delegate_job_application(job_details: dict) -> dict:
     metrics = None
     try:
         reset_auto_simplify_attempts()
+        # Resume tailoring is a required precondition, not an optional worker
+        # suggestion.  This prevents Simplify's saved profile or an old prompt
+        # from silently submitting the default resume.
+        if not job_description:
+            raise RuntimeError(
+                "Cannot start this application because its job description is missing; "
+                "a tailored resume is required for every submission."
+            )
+        from src.application.tailoring import tailor_documents
+        from src.application.resume_selection import activate_tailored_resume
+
+        tailored_documents = await tailor_documents(
+            job_description=job_description,
+            company=company,
+            title=title,
+        )
+        tailored_resume = activate_tailored_resume(tailored_documents.resume_pdf)
+        outcome["tailored_resume_path"] = str(tailored_resume)
+        log_event("TAILORED_RESUME_READY", {"path": str(tailored_resume)})
         from src.application.metrics import (
             fetch_openrouter_credit_snapshot,
             start_application_metrics,
@@ -269,7 +341,11 @@ async def delegate_job_application(job_details: dict) -> dict:
         Job Title: {title}
         Company: {company}
         Apply URL: {apply_url}
+        ACTIVE TAILORED RESUME (mandatory for every resume upload): {tailored_resume}
         {resume_instruction}
+
+        JOB DESCRIPTION:
+        {job_description or 'No job description was stored for this job. Do not create tailored documents.'}
 
         User Profile and Resume: {user_profile}
         """
@@ -465,6 +541,35 @@ def read_file(file_name : str):
         return f"File '{file_name}' could not be read or does not exist: {e}. If this was an optional skill file. "
 
 
+async def _replace_simplify_resume_with_tailored() -> str | None:
+    """Immediately replace Simplify's saved resume when a standard input exists."""
+    from src.agent.app import mcp_manager
+    from src.application.resume_selection import (
+        active_tailored_resume,
+        build_tailored_resume_replacement_code,
+        tailored_resume_requirement,
+    )
+
+    tailored = active_tailored_resume()
+    if tailored is None:
+        return None
+    try:
+        output = await mcp_manager.call_tool(
+            "playwright",
+            "browser_run_code_unsafe",
+            {"code": build_tailored_resume_replacement_code(tailored)},
+        )
+    except Exception as exc:
+        return (
+            "TAILORED_RESUME_REPLACEMENT_PENDING: Automatic replacement could not "
+            f"reach the upload control ({exc}). {tailored_resume_requirement()}"
+        )
+    return (
+        f"TAILORED_RESUME_REPLACEMENT: {output}. "
+        f"{tailored_resume_requirement()}"
+    )
+
+
 @tool
 async def simplify_autofill() -> str:
     """Trigger Simplify Autofill in the user's Chrome profile.
@@ -497,17 +602,20 @@ async def simplify_autofill() -> str:
     except Exception as exc:
         return f"SIMPLIFY_FAILED: Unexpected Selenium error: {exc}"
 
+    replacement = await _replace_simplify_resume_with_tailored()
     if result.changed_fields:
-        return (
+        message = (
             f"SIMPLIFY_SUCCESS: Simplify Autofill populated {result.changed_fields} "
             "additional form control(s) in the Chrome-profile browser. Review the "
             "open Chrome window before continuing."
         )
-    return (
-        "SIMPLIFY_NO_CHANGES: Simplify's Autofill command ran in the open Chrome "
-        "profile, but no additional controls changed. Check the Chrome window for "
-        "a Simplify sign-in or review prompt."
-    )
+    else:
+        message = (
+            "SIMPLIFY_NO_CHANGES: Simplify's Autofill command ran in the open Chrome "
+            "profile, but no additional controls changed. Check the Chrome window for "
+            "a Simplify sign-in or review prompt."
+        )
+    return f"{message}\n\n{replacement}" if replacement else message
 
 
 @tool
@@ -550,19 +658,22 @@ async def simplify_autofill_all_skills() -> str:
     except Exception as exc:
         return f"SIMPLIFY_SKILLS_FAILED: Unexpected Selenium error: {exc}"
 
+    replacement = await _replace_simplify_resume_with_tailored()
     count = str(result.selected_count) if result.selected_count is not None else "all"
     elapsed = round(result.elapsed_seconds)
     if result.completion == "complete":
-        return (
+        message = (
             f"SIMPLIFY_SKILLS_SUCCESS: Selected all {count} Simplify skill(s) and "
             f"Simplify reported completion after {elapsed}s. Scan the Workday form "
             "before continuing."
         )
-    return (
-        f"SIMPLIFY_SKILLS_SUCCESS: Selected all {count} Simplify skill(s); the skills "
-        f"panel closed after {elapsed}s. Scan the Workday form and Simplify panel "
-        "before continuing."
-    )
+    else:
+        message = (
+            f"SIMPLIFY_SKILLS_SUCCESS: Selected all {count} Simplify skill(s); the skills "
+            f"panel closed after {elapsed}s. Scan the Workday form and Simplify panel "
+            "before continuing."
+        )
+    return f"{message}\n\n{replacement}" if replacement else message
 
 
 @tool
@@ -742,18 +853,23 @@ def get_jobs(filters: list[str] = None, n: int = None, job_id: str | None = None
     # ``queue_ready_at`` value.  Prefer it over the original fetch time so the
     # resumed job goes to the tail rather than jumping ahead of work already
     # in the queue.
+    # Excel rows can contain legacy naive timestamps while CAPTCHA queue rows
+    # use ISO-8601 UTC offsets. Normalizing both columns to UTC keeps Pandas
+    # from rejecting their comparison during the queue sort.
     fetched_at = (
-        pd.to_datetime(pending["fetched_at"], errors="coerce")
+        pd.to_datetime(pending["fetched_at"], errors="coerce", utc=True)
         if "fetched_at" in pending.columns else pd.Series(pd.NaT, index=pending.index)
     )
     queue_ready_at = (
-        pd.to_datetime(pending["queue_ready_at"], errors="coerce")
+        pd.to_datetime(pending["queue_ready_at"], errors="coerce", utc=True)
         if "queue_ready_at" in pending.columns else pd.Series(pd.NaT, index=pending.index)
     )
     pending["_queue_sort_at"] = queue_ready_at.fillna(fetched_at)
     # Missing timestamps are old, stable rows; keep their source order after
     # sorting rather than accidentally putting them behind a requeued job.
-    pending["_queue_sort_at"] = pending["_queue_sort_at"].fillna(pd.Timestamp.min)
+    pending["_queue_sort_at"] = pending["_queue_sort_at"].fillna(
+        pd.Timestamp("1900-01-01", tz="UTC")
+    )
     pending.sort_values("_queue_sort_at", ascending=True, kind="stable", inplace=True)
     pending.drop(columns=["_queue_sort_at"], inplace=True)
 
